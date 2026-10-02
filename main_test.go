@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/hinshun/vt10x"
@@ -34,7 +35,7 @@ func TestNavigationAndTextInput(t *testing.T) {
 		t.Fatalf("expected y to move down to 1, got %d", state.y)
 	}
 
-	state.x = 2
+	state.x = 1
 	state.y = 4
 	state.applyInput([]byte{' '}, 1)
 	assertShellInput(t, shell, " ")
@@ -73,13 +74,13 @@ func TestModifierModes(t *testing.T) {
 
 func TestCapsLockTogglesLetterCase(t *testing.T) {
 	state, shell := newTestKeyboardState()
-	state.x, state.y = 1, 2
+	state.x, state.y = 0, 2
 	state.insertSelectedKey()
 	if !state.capsLock {
 		t.Fatal("expected caps lock to turn on")
 	}
 
-	state.x = 0
+	state.x = 1
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "A")
 	if !state.capsLock {
@@ -92,14 +93,14 @@ func TestCapsLockTogglesLetterCase(t *testing.T) {
 
 	state.x, state.y = 0, 3
 	state.insertSelectedKey()
-	state.x, state.y = 0, 2
+	state.x, state.y = 1, 2
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "a")
 	if !state.capsLock || state.shiftOnce {
 		t.Fatal("expected one-shot shift to type lowercase once while caps lock stays on")
 	}
 
-	state.x, state.y = 1, 2
+	state.x, state.y = 0, 2
 	state.insertSelectedKey()
 	if state.capsLock {
 		t.Fatal("expected caps lock to turn off")
@@ -112,8 +113,8 @@ func TestVerticalNavigationTracksNearestKeyCenter(t *testing.T) {
 	if state.y != 4 {
 		t.Fatalf("expected y to move to last row, got %d", state.y)
 	}
-	if state.x != 2 {
-		t.Fatalf("expected vertical movement to select the nearest centered key at x=2, got %d", state.x)
+	if state.x != 1 {
+		t.Fatalf("expected vertical movement to select the nearest centered key at x=1, got %d", state.x)
 	}
 }
 
@@ -123,11 +124,11 @@ func TestVerticalNavigationChoosesNearestKeyCenter(t *testing.T) {
 		x    int
 		want int
 	}{
-		{name: "left ctrl to z", x: 0, want: 0},
-		{name: "left alt to c", x: 1, want: 2},
-		{name: "space to v on equal-distance tie", x: 2, want: 3},
-		{name: "right alt to n", x: 3, want: 5},
-		{name: "right ctrl to comma", x: 4, want: 7},
+		{name: "ctrl to x", x: 0, want: 2},
+		{name: "space to c", x: 1, want: 3},
+		{name: "meta to b", x: 2, want: 5},
+		{name: "left arrow to m", x: 3, want: 7},
+		{name: "down arrow to comma", x: 4, want: 8},
 	}
 
 	for _, test := range tests {
@@ -183,15 +184,96 @@ func TestVirtualSpecialKeysAndModifiers(t *testing.T) {
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "\x1b")
 
-	state.modifier = "ctrl"
+	state.ctrl = true
 	state.x, state.y = 3, 3
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "\x03")
 
-	state.modifier = ""
-	state.x, state.y = 7, 4
+	state.ctrl = false
+	state.x, state.y = 5, 4
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "\x1b[A")
+}
+
+func TestCtrlAndMetaApplyToNextKeypressAndCanBeCombined(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.x, state.y = 0, 4
+	state.insertSelectedKey()
+	state.x, state.y = 2, 4
+	state.insertSelectedKey()
+	if !state.ctrl || !state.meta {
+		t.Fatal("expected Ctrl and Meta to be active together")
+	}
+
+	state.x, state.y = 1, 1
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x1b\x11")
+	if state.ctrl || state.meta {
+		t.Fatal("expected Ctrl and Meta to clear after the next keypress")
+	}
+
+	state.x, state.y = 0, 4
+	state.insertSelectedKey()
+	state.x, state.y = 1, 1
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x11")
+	if state.ctrl || state.meta {
+		t.Fatal("expected Ctrl to clear after the next keypress")
+	}
+}
+
+func TestCtrlAndMetaCanBeToggledOffBeforeUse(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.x, state.y = 0, 4
+	state.insertSelectedKey()
+	state.x, state.y = 2, 4
+	state.insertSelectedKey()
+	state.x, state.y = 0, 4
+	state.insertSelectedKey()
+	if state.ctrl || !state.meta {
+		t.Fatal("expected Ctrl to toggle off while Meta remains active")
+	}
+
+	state.x, state.y = 1, 1
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x1bq")
+	if state.ctrl || state.meta {
+		t.Fatal("expected remaining Meta modifier to clear after keypress")
+	}
+
+	state.x, state.y = 2, 4
+	state.insertSelectedKey()
+	state.x, state.y = 2, 4
+	state.insertSelectedKey()
+	if state.meta {
+		t.Fatal("expected Meta to toggle off when activated a second time")
+	}
+}
+
+func TestCtrlSpaceAndModifiedSpecialKeys(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.ctrl = true
+	state.x, state.y = 1, 4
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x00")
+
+	state.ctrl = false
+	state.meta = true
+	state.x, state.y = 0, 1
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x1b\t")
+	if state.meta {
+		t.Fatal("expected Meta to clear after the next keypress")
+	}
+
+	state.ctrl = true
+	state.meta = true
+	state.x, state.y = 3, 4
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x1b[1;7D")
+	if state.ctrl || state.meta {
+		t.Fatal("expected Ctrl and Meta to clear after a modified arrow key")
+	}
 }
 
 func TestTerminalProcessesCursorAndEraseSequences(t *testing.T) {
@@ -219,4 +301,26 @@ func TestPhysicalTypingOnlyNavigatesOrActivates(t *testing.T) {
 	state.applyInput([]byte{'l'}, 1)
 	state.applyInput([]byte{'\r'}, 1)
 	assertShellInput(t, shell, "`")
+}
+
+func TestSelectedKeyboardCellUsesBlackOnWhiteHighlightWithoutBrackets(t *testing.T) {
+	var frame strings.Builder
+	writeKeyboardCell(&frame, " q  ", true, false)
+
+	const want = "\033[30;47m q  \033[0m"
+	if got := frame.String(); got != want {
+		t.Fatalf("expected selected cell %q, got %q", want, got)
+	}
+}
+
+func TestActiveModifierCellIsHighlighted(t *testing.T) {
+	for _, cell := range []string{" ctrl ", " meta ", " shift ", " caps "} {
+		var frame strings.Builder
+		writeKeyboardCell(&frame, cell, false, true)
+
+		want := "\033[37;44m" + cell + "\033[0m"
+		if got := frame.String(); got != want {
+			t.Fatalf("expected active modifier cell %q, got %q", want, got)
+		}
+	}
 }

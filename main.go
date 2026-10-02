@@ -18,23 +18,24 @@ import (
 var key = [][]string{
 	{"esc", "`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "del"},
 	{"tab", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "[", "]", "\\"},
-	{"a", "caps", "s", "d", "f", "g", "h", "j", "k", "l", ";", "'", "return"},
+	{"caps", "a", "s", "d", "f", "g", "h", "j", "k", "l", ";", "'", "return"},
 	{"shift", "z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "shift"},
-	{"ctrl", "alt", "SPACE", "alt", "ctrl", "←", "↓", "↑", "→"},
+	{"ctrl", "SPACE", "meta", "←", "↓", "↑", "→"},
 }
 
 var shiftedKey = [][]string{
 	{"esc", "~", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "del"},
 	{"tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "{", "}", "|"},
-	{"A", "caps", "S", "D", "F", "G", "H", "J", "K", "L", ":", "'", "return"},
+	{"caps", "A", "S", "D", "F", "G", "H", "J", "K", "L", ":", "'", "return"},
 	{"shift", "Z", "X", "C", "V", "B", "N", "M", "<", ">", "?", "shift"},
-	{"ctrl", "alt", "SPACE", "alt", "ctrl", "←", "↓", "↑", "→"},
+	{"ctrl", "SPACE", "meta", "←", "↓", "↑", "→"},
 }
 
 type keyboardState struct {
 	x            int
 	y            int
-	modifier     string
+	ctrl         bool
+	meta         bool
 	shiftOnce    bool
 	capsLock     bool
 	shell        io.Writer
@@ -261,64 +262,78 @@ func (s *keyboardState) insertSelectedKey() {
 		s.shiftOnce = false
 		return
 	}
-	if selected == "ctrl" || selected == "alt" {
-		if s.modifier == selected {
-			s.modifier = ""
-		} else {
-			s.modifier = selected
-		}
+	if selected == "ctrl" {
+		s.ctrl = !s.ctrl
+		return
+	}
+	if selected == "meta" {
+		s.meta = !s.meta
 		return
 	}
 
+	shift := s.shiftOnce
+	ctrl := s.ctrl
+	meta := s.meta
+	s.shiftOnce = false
+	s.ctrl = false
+	s.meta = false
+
 	value := key[s.y][s.x]
-	shifted := s.capsLock != s.shiftOnce
-	if value == "SPACE" {
-		s.shiftOnce = false
-	} else if len(value) == 1 {
+	shifted := s.capsLock != shift
+	if len(value) == 1 {
 		if value[0] >= 'a' && value[0] <= 'z' {
 			if shifted {
 				value = strings.ToUpper(value)
 			}
-		} else if s.shiftOnce {
+		} else if shift {
 			value = shiftValue(value)
 		}
-		s.shiftOnce = false
 	}
-	if s.modifier == "ctrl" && len(value) == 1 {
-		upper := strings.ToUpper(value)
-		if upper[0] >= '@' && upper[0] <= '_' {
-			value = string(upper[0] & 0x1f)
-		}
-	}
-
 	switch value {
 	case "SPACE":
-		s.emitToShell(" ")
+		value = " "
 	case "del":
-		s.emitToShell("\x7f")
+		value = "\x7f"
 	case "return", "rtrn":
-		s.emitToShell("\r")
+		value = "\r"
 	case "esc":
-		s.emitToShell("\x1b")
+		value = "\x1b"
 	case "tab":
-		s.emitToShell("\t")
+		value = "\t"
 	case "left", "right", "up", "down", "←", "→", "↑", "↓":
-		sequence := s.arrowSequence(value)
-		if s.modifier == "alt" {
-			sequence = "\x1b" + sequence
-		}
-		s.emitToShell(sequence)
-	default:
-		if value != "" {
-			if s.modifier == "alt" {
-				value = "\x1b" + value
-			}
-			s.emitToShell(value)
-		}
+		s.emitToShell(s.arrowSequence(value, ctrl, meta))
+		return
 	}
+	if ctrl {
+		value = controlCode(value)
+	}
+	if meta {
+		value = "\x1b" + value
+	}
+	s.emitToShell(value)
 }
 
-func (s *keyboardState) arrowSequence(keyName string) string {
+func controlCode(value string) string {
+	if len(value) != 1 {
+		return value
+	}
+	char := value[0]
+	if char >= 'a' && char <= 'z' {
+		char -= 'a' - 'A'
+	}
+	if char == ' ' {
+		return "\x00"
+	}
+	if char >= '@' && char <= '_' {
+		return string(char & 0x1f)
+	}
+	if char == '?' {
+		return "\x7f"
+	}
+	return value
+}
+
+func (s *keyboardState) arrowSequence(keyName string, ctrl, meta bool) string {
 	final := map[string]string{
 		"up": "A", "↑": "A",
 		"down": "B", "↓": "B",
@@ -328,15 +343,29 @@ func (s *keyboardState) arrowSequence(keyName string) string {
 	if final == "" {
 		return ""
 	}
+	if ctrl {
+		modifier := 5
+		if meta {
+			modifier = 7
+		}
+		return fmt.Sprintf("\x1b[1;%d%s", modifier, final)
+	}
 	if s.terminal != nil {
 		s.terminal.Lock()
 		applicationCursor := s.terminal.Mode()&vt10x.ModeAppCursor != 0
 		s.terminal.Unlock()
 		if applicationCursor {
+			if meta {
+				return "\x1b\x1bO" + final
+			}
 			return "\x1bO" + final
 		}
 	}
-	return "\x1b[" + final
+	sequence := "\x1b[" + final
+	if meta {
+		sequence = "\x1b" + sequence
+	}
+	return sequence
 }
 
 func (s *keyboardState) emitToShell(value string) {
@@ -387,7 +416,7 @@ func (s *keyboardState) draw() {
 	}
 	s.terminalCols = cols
 
-	visibleLines := rows / 2
+	visibleLines := rows - len(layout)
 	if visibleLines < 1 {
 		visibleLines = 1
 	}
@@ -404,12 +433,13 @@ func (s *keyboardState) draw() {
 		cells := make([]string, len(row))
 		lineWidth := 0
 		for col, keyName := range row {
-			if rowIndex == s.y && col == s.x {
-				cells[col] = fmt.Sprintf("[%s] ", keyName)
-			} else {
-				cells[col] = fmt.Sprintf(" %s  ", keyName)
-			}
-			line.WriteString(cells[col])
+			cells[col] = fmt.Sprintf(" %s ", keyName)
+			selected := rowIndex == s.y && col == s.x
+			activeModifier := keyName == "ctrl" && s.ctrl ||
+				keyName == "meta" && s.meta ||
+				keyName == "shift" && s.shiftOnce ||
+				keyName == "caps" && s.capsLock
+			writeKeyboardCell(&line, cells[col], selected, activeModifier)
 			lineWidth += utf8.RuneCountInString(cells[col])
 		}
 		startX := (cols - lineWidth) / 2
@@ -443,6 +473,18 @@ func (s *keyboardState) draw() {
 		}
 	}
 	_, _ = os.Stdout.Write([]byte(frame.String()))
+}
+
+func writeKeyboardCell(frame *strings.Builder, cell string, selected, activeModifier bool) {
+	if selected {
+		frame.WriteString("\033[30;47m")
+	} else if activeModifier {
+		frame.WriteString("\033[37;44m")
+	}
+	frame.WriteString(cell)
+	if selected || activeModifier {
+		frame.WriteString("\033[0m")
+	}
 }
 
 func (s *keyboardState) resizeTerminal(cols, rows int) {
