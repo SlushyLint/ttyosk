@@ -18,27 +18,28 @@ import (
 var key = [][]string{
 	{"esc", "`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "del"},
 	{"tab", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "[", "]", "\\"},
-	{"a", "s", "d", "f", "g", "h", "j", "k", "l", ";", "'", "rtrn"},
-	{"z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "shift"},
+	{"a", "s", "d", "f", "g", "h", "j", "k", "l", ";", "'", "return"},
+	{"shift","z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "shift"},
 	{"ctrl", "alt", "SPACE", "alt", "ctrl", "←", "↓", "↑", "→"},
 }
 
 var shiftedKey = [][]string{
 	{"esc", "~", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "del"},
 	{"tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "{", "}", "|"},
-	{"A", "S", "D", "F", "G", "H", "J", "K", "L", ":", "'", "rtrn"},
+	{"A", "S", "D", "F", "G", "H", "J", "K", "L", ":", "'", "return"},
 	{"Z", "X", "C", "V", "B", "N", "M", "<", ">", "?", "shift"},
 	{"ctrl", "alt", "SPACE", "alt", "ctrl", "←", "↓", "↑", "→"},
 }
 
 type keyboardState struct {
-	x        int
-	y        int
-	modifier string
-	shell    io.Writer
-	ptmx     *os.File
-	terminal vt10x.Terminal
-	keyAreas []keyHitArea
+	x            int
+	y            int
+	modifier     string
+	shell        io.Writer
+	ptmx         *os.File
+	terminal     vt10x.Terminal
+	keyAreas     []keyHitArea
+	terminalCols int
 }
 
 type keyHitArea struct {
@@ -50,21 +51,74 @@ type keyHitArea struct {
 }
 
 func (s *keyboardState) move(dx, dy int) {
+	layout := s.activeLayout()
 	newY := s.y + dy
-	if newY < 0 || newY >= len(key) {
+	if s.y < 0 || s.y >= len(layout) || newY < 0 || newY >= len(layout) {
 		return
 	}
 
-	newX := s.x + dx
-	rowLen := len(key[newY])
+	currentX := s.x
+	if currentX < 0 {
+		currentX = 0
+	} else if currentX >= len(layout[s.y]) {
+		currentX = len(layout[s.y]) - 1
+	}
+	newX := currentX
+	if dy != 0 {
+		cols := s.terminalCols
+		if cols <= 0 {
+			cols = 80
+		}
+		targetCenter := keyboardKeyCenter(layout[s.y], currentX, cols)
+		bestDistance := int(^uint(0) >> 1)
+		bestIndexDistance := bestDistance
+		for candidate := range layout[newY] {
+			center := keyboardKeyCenter(layout[newY], candidate, cols)
+			distance := absInt(center - targetCenter)
+			indexDistance := absInt(candidate - currentX)
+			if distance < bestDistance || (distance == bestDistance && indexDistance < bestIndexDistance) {
+				newX = candidate
+				bestDistance = distance
+				bestIndexDistance = indexDistance
+			}
+		}
+	}
+	newX += dx
 	if newX < 0 {
 		newX = 0
-	} else if newX >= rowLen {
-		newX = rowLen - 1
+	} else if newX >= len(layout[newY]) {
+		newX = len(layout[newY]) - 1
 	}
 
 	s.x = newX
 	s.y = newY
+}
+
+func keyboardKeyCenter(row []string, index, cols int) int {
+	rowWidth := 0
+	for _, keyName := range row {
+		rowWidth += utf8.RuneCountInString(keyName) + 3
+	}
+	startX := (cols - rowWidth) / 2
+	if startX < 1 {
+		startX = 1
+	}
+	center := startX * 2
+	for i, keyName := range row {
+		width := utf8.RuneCountInString(keyName) + 3
+		if i == index {
+			return center + width
+		}
+		center += width * 2
+	}
+	return center
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func (s *keyboardState) activeLayout() [][]string {
@@ -307,6 +361,7 @@ func (s *keyboardState) draw() {
 	if rows <= 0 {
 		rows = 24
 	}
+	s.terminalCols = cols
 
 	visibleLines := rows / 2
 	if visibleLines < 1 {

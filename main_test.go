@@ -68,14 +68,38 @@ func TestModifierModes(t *testing.T) {
 	assertShellInput(t, shell, "~")
 }
 
-func TestMoveClampsToRowWidth(t *testing.T) {
+func TestVerticalNavigationTracksNearestKeyCenter(t *testing.T) {
 	state := keyboardState{x: 4, y: 3}
 	state.move(0, 1)
 	if state.y != 4 {
 		t.Fatalf("expected y to move to last row, got %d", state.y)
 	}
-	if state.x != 4 {
-		t.Fatalf("expected x to clamp to row width, got %d", state.x)
+	if state.x != 2 {
+		t.Fatalf("expected vertical movement to select the nearest centered key at x=2, got %d", state.x)
+	}
+}
+
+func TestVerticalNavigationChoosesNearestKeyCenter(t *testing.T) {
+	tests := []struct {
+		name string
+		x    int
+		want int
+	}{
+		{name: "left ctrl to z", x: 0, want: 0},
+		{name: "left alt to c", x: 1, want: 2},
+		{name: "space to v on equal-distance tie", x: 2, want: 3},
+		{name: "right alt to n", x: 3, want: 5},
+		{name: "right ctrl to comma", x: 4, want: 7},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := keyboardState{x: test.x, y: 4, terminalCols: 80}
+			state.move(0, -1)
+			if state.y != 3 || state.x != test.want {
+				t.Fatalf("expected nearest key at row 3, column %d; got row %d, column %d", test.want, state.y, state.x)
+			}
+		})
 	}
 }
 
