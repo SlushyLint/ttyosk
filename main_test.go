@@ -42,17 +42,20 @@ func TestNavigationAndTextInput(t *testing.T) {
 
 func TestModifierModes(t *testing.T) {
 	state, shell := newTestKeyboardState()
-	state.x = 10
+	state.x = 0
 	state.y = 3
 	state.insertSelectedKey()
-	if state.modifier != "shift" {
-		t.Fatalf("expected shift mode to activate, got %q", state.modifier)
+	if !state.shiftOnce {
+		t.Fatal("expected one-shot shift to activate")
 	}
 
 	state.x = 1
 	state.y = 1
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "Q")
+	if state.shiftOnce {
+		t.Fatal("expected shift to clear after the next character")
+	}
 
 	state, shell = newTestKeyboardState()
 	state.x = 1
@@ -61,11 +64,46 @@ func TestModifierModes(t *testing.T) {
 	assertShellInput(t, shell, "`")
 
 	state, shell = newTestKeyboardState()
-	state.modifier = "shift"
+	state.shiftOnce = true
 	state.x = 1
 	state.y = 0
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "~")
+}
+
+func TestCapsLockTogglesLetterCase(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.x, state.y = 1, 2
+	state.insertSelectedKey()
+	if !state.capsLock {
+		t.Fatal("expected caps lock to turn on")
+	}
+
+	state.x = 0
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "A")
+	if !state.capsLock {
+		t.Fatal("expected caps lock to remain on after typing")
+	}
+
+	state.x, state.y = 2, 0
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "1")
+
+	state.x, state.y = 0, 3
+	state.insertSelectedKey()
+	state.x, state.y = 0, 2
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "a")
+	if !state.capsLock || state.shiftOnce {
+		t.Fatal("expected one-shot shift to type lowercase once while caps lock stays on")
+	}
+
+	state.x, state.y = 1, 2
+	state.insertSelectedKey()
+	if state.capsLock {
+		t.Fatal("expected caps lock to turn off")
+	}
 }
 
 func TestVerticalNavigationTracksNearestKeyCenter(t *testing.T) {
@@ -113,20 +151,20 @@ func TestDefaultLettersAreLowercase(t *testing.T) {
 
 func TestVirtualKeyboardTypesAndReturnSubmits(t *testing.T) {
 	state, shell := newTestKeyboardState()
-	for _, position := range [][2]int{{3, 1}, {2, 3}, {5, 2}, {9, 1}} {
+	for _, position := range [][2]int{{3, 1}, {3, 3}, {6, 2}, {9, 1}} {
 		state.x, state.y = position[0], position[1]
 		state.applyInput([]byte{' '}, 1)
 	}
 	assertShellInput(t, shell, "echo")
 
-	state.x, state.y = 11, 2
+	state.x, state.y = 12, 2
 	state.applyInput([]byte{' '}, 1)
 	assertShellInput(t, shell, "\r")
 }
 
 func TestMouseClickActivatesVirtualReturn(t *testing.T) {
 	state, shell := newTestKeyboardState()
-	state.keyAreas = []keyHitArea{{left: 20, right: 26, x: 11, y: 18, row: 2}}
+	state.keyAreas = []keyHitArea{{left: 20, right: 26, x: 12, y: 18, row: 2}}
 
 	event := []byte("\033[<0;23;18M")
 	state.applyInput(event, len(event))
@@ -136,8 +174,8 @@ func TestMouseClickActivatesVirtualReturn(t *testing.T) {
 
 func TestVirtualSpecialKeysAndModifiers(t *testing.T) {
 	state, shell := newTestKeyboardState()
-	state.modifier = "shift"
-	state.x, state.y = 11, 2
+	state.shiftOnce = true
+	state.x, state.y = 12, 2
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "\r")
 
@@ -146,7 +184,7 @@ func TestVirtualSpecialKeysAndModifiers(t *testing.T) {
 	assertShellInput(t, shell, "\x1b")
 
 	state.modifier = "ctrl"
-	state.x, state.y = 2, 3
+	state.x, state.y = 3, 3
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "\x03")
 

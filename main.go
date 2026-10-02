@@ -18,16 +18,16 @@ import (
 var key = [][]string{
 	{"esc", "`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "del"},
 	{"tab", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "[", "]", "\\"},
-	{"a", "s", "d", "f", "g", "h", "j", "k", "l", ";", "'", "return"},
-	{"shift","z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "shift"},
+	{"a", "caps", "s", "d", "f", "g", "h", "j", "k", "l", ";", "'", "return"},
+	{"shift", "z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "shift"},
 	{"ctrl", "alt", "SPACE", "alt", "ctrl", "←", "↓", "↑", "→"},
 }
 
 var shiftedKey = [][]string{
 	{"esc", "~", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "del"},
 	{"tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "{", "}", "|"},
-	{"A", "S", "D", "F", "G", "H", "J", "K", "L", ":", "'", "return"},
-	{"Z", "X", "C", "V", "B", "N", "M", "<", ">", "?", "shift"},
+	{"A", "caps", "S", "D", "F", "G", "H", "J", "K", "L", ":", "'", "return"},
+	{"shift", "Z", "X", "C", "V", "B", "N", "M", "<", ">", "?", "shift"},
 	{"ctrl", "alt", "SPACE", "alt", "ctrl", "←", "↓", "↑", "→"},
 }
 
@@ -35,6 +35,8 @@ type keyboardState struct {
 	x            int
 	y            int
 	modifier     string
+	shiftOnce    bool
+	capsLock     bool
 	shell        io.Writer
 	ptmx         *os.File
 	terminal     vt10x.Terminal
@@ -122,10 +124,21 @@ func absInt(value int) int {
 }
 
 func (s *keyboardState) activeLayout() [][]string {
-	if s.modifier == "shift" {
-		return shiftedKey
+	layout := make([][]string, len(key))
+	for rowIndex, row := range key {
+		layout[rowIndex] = make([]string, len(row))
+		for col, keyName := range row {
+			isLetter := len(keyName) == 1 && keyName[0] >= 'a' && keyName[0] <= 'z'
+			if isLetter && s.capsLock != s.shiftOnce {
+				layout[rowIndex][col] = strings.ToUpper(keyName)
+			} else if s.shiftOnce {
+				layout[rowIndex][col] = shiftedKey[rowIndex][col]
+			} else {
+				layout[rowIndex][col] = keyName
+			}
+		}
 	}
-	return key
+	return layout
 }
 
 func (s *keyboardState) currentKey() string {
@@ -240,11 +253,12 @@ func shiftValue(value string) string {
 func (s *keyboardState) insertSelectedKey() {
 	selected := s.currentKey()
 	if selected == "shift" {
-		if s.modifier == "shift" {
-			s.modifier = ""
-		} else {
-			s.modifier = "shift"
-		}
+		s.shiftOnce = !s.shiftOnce
+		return
+	}
+	if selected == "caps" {
+		s.capsLock = !s.capsLock
+		s.shiftOnce = false
 		return
 	}
 	if selected == "ctrl" || selected == "alt" {
@@ -256,9 +270,19 @@ func (s *keyboardState) insertSelectedKey() {
 		return
 	}
 
-	value := selected
-	if s.modifier == "shift" && len(value) == 1 {
-		value = shiftValue(value)
+	value := key[s.y][s.x]
+	shifted := s.capsLock != s.shiftOnce
+	if value == "SPACE" {
+		s.shiftOnce = false
+	} else if len(value) == 1 {
+		if value[0] >= 'a' && value[0] <= 'z' {
+			if shifted {
+				value = strings.ToUpper(value)
+			}
+		} else if s.shiftOnce {
+			value = shiftValue(value)
+		}
+		s.shiftOnce = false
 	}
 	if s.modifier == "ctrl" && len(value) == 1 {
 		upper := strings.ToUpper(value)
@@ -272,7 +296,7 @@ func (s *keyboardState) insertSelectedKey() {
 		s.emitToShell(" ")
 	case "del":
 		s.emitToShell("\x7f")
-	case "rtrn":
+	case "return", "rtrn":
 		s.emitToShell("\r")
 	case "esc":
 		s.emitToShell("\x1b")

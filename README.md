@@ -42,7 +42,7 @@ The application launches `zsh` in a PTY. Shell output appears above the virtual 
 - Click a displayed key to type it. The terminal emulator must support SGR mouse reporting for clicks.
 - Use the physical arrow keys, or `h`, `j`, `k`, and `l`, to move the selection. Press Space or physical Enter to activate the selected virtual key.
 - The virtual Return key submits the current command to the shell.
-- The virtual Shift, Ctrl, and Alt keys apply their respective modifier modes. Virtual Esc, Tab, and arrow keys send those keys to the shell.
+- Virtual Shift affects the next character only. The `caps` key beside `a` toggles Caps Lock for letters; Shift temporarily reverses Caps Lock for one character. Ctrl and Alt apply their modifier modes. Virtual Esc, Tab, and arrow keys send those keys to the shell.
 - Press physical Escape to exit `ttyosk`. The virtual Esc key sends Escape to the shell instead.
 
 ## Tests
