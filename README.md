@@ -9,6 +9,7 @@
 - `zsh` installed and available on `PATH` by default; `shell.command` can select another installed shell.
 - A UTF-8 terminal emulator with ANSI/VT control-sequence and SGR mouse-reporting support. Mouse hover and clicks on displayed keys use SGR mouse reporting, which works through terminal emulators running under X11 or Wayland.
 - On the Linux virtual console, an active GPM daemon can provide mouse hover and click input. GPM support is optional; no extra Go dependency is required.
+- On Linux, Bluetooth and USB gamepads exposed as `/dev/input/js*` can navigate the keyboard with the D-pad or left stick. The South/A button activates the selected key, and East/B sends Backspace. Devices are detected while `ttyosk` is running; the process needs read access to the joystick device.
 - An 80-column by 24-row terminal is recommended. Smaller windows may cause the keyboard layout to wrap or overlap.
 
 ## Dependencies

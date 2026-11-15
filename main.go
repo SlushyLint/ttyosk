@@ -103,6 +103,14 @@ type gpmEvent struct {
 	err          error
 }
 
+type gamepadEvent struct {
+	dx        int
+	dy        int
+	selectKey bool
+	backspace bool
+	err       error
+}
+
 func (s *keyboardState) move(dx, dy int) {
 	layout := s.activeLayout()
 	newY := s.y + dy
@@ -1339,6 +1347,9 @@ func main() {
 			mouseEvents = nil
 		}
 	}
+	controllerEvents := make(chan gamepadEvent, 32)
+	go watchGamepads(controllerEvents)
+
 	resized := make(chan os.Signal, 1)
 	signal.Notify(resized, syscall.SIGWINCH)
 	defer signal.Stop(resized)
@@ -1363,6 +1374,21 @@ func main() {
 				continue
 			}
 			state.handleGPMEvent(event)
+			state.reportError()
+		case event := <-controllerEvents:
+			if event.err != nil {
+				fmt.Fprintf(os.Stderr, "ttyosk: controller: %v\n", event.err)
+				continue
+			}
+			if event.dx != 0 || event.dy != 0 {
+				state.move(event.dx, event.dy)
+			}
+			if event.selectKey {
+				state.insertSelectedKey()
+			}
+			if event.backspace {
+				state.emitToShell("\x7f")
+			}
 			state.reportError()
 		case <-resized:
 			cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
