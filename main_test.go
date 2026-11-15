@@ -8,6 +8,25 @@ import (
 	"github.com/hinshun/vt10x"
 )
 
+type testKeyboardEmitter struct {
+	keys      []string
+	modifiers []uint8
+	text      []string
+}
+
+func (k *testKeyboardEmitter) EmitKey(key string, modifiers uint8) error {
+	k.keys = append(k.keys, key)
+	k.modifiers = append(k.modifiers, modifiers)
+	return nil
+}
+
+func (k *testKeyboardEmitter) TypeText(text string) error {
+	k.text = append(k.text, text)
+	return nil
+}
+
+func (*testKeyboardEmitter) Close() error { return nil }
+
 func newTestKeyboardState() (keyboardState, *bytes.Buffer) {
 	shell := &bytes.Buffer{}
 	return keyboardState{shell: shell}, shell
@@ -157,6 +176,75 @@ func TestDvorakLayoutChangesTypedKey(t *testing.T) {
 	state.x, state.y = 1, 1
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "'")
+}
+
+func TestUinputOutputEmitsSelectedKeysAndModifiers(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Keyboard.Output = "uinput"
+	state.config.Keyboard.Layout = "dvorak"
+	keyboard := &testKeyboardEmitter{}
+	state.uinput = keyboard
+
+	state.x, state.y = 1, 1
+	state.insertSelectedKey()
+	state.x, state.y = 0, 3
+	state.insertSelectedKey()
+	state.x, state.y = 1, 1
+	state.insertSelectedKey()
+
+	if len(keyboard.keys) != 2 || keyboard.keys[0] != "q" || keyboard.keys[1] != "q" {
+		t.Fatalf("expected Dvorak key position to emit QWERTY physical key q twice, got %v", keyboard.keys)
+	}
+	if keyboard.modifiers[0] != 0 || keyboard.modifiers[1] != uinputShift {
+		t.Fatalf("expected Shift modifier on the second key, got %v", keyboard.modifiers)
+	}
+	if got := shell.String(); got != "" {
+		t.Fatalf("expected no shell input in uinput mode, got %q", got)
+	}
+	if state.shiftOnce {
+		t.Fatal("expected one-shot Shift to clear after typing")
+	}
+}
+
+func TestUinputCapsLockAndTextUseSystemKeyboard(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Keyboard.Output = "uinput"
+	keyboard := &testKeyboardEmitter{}
+	state.uinput = keyboard
+
+	state.x, state.y = 0, 2
+	state.insertSelectedKey()
+	state.x, state.y = 1, 1
+	state.insertSelectedKey()
+	state.emitToShell("pasted")
+
+	if len(keyboard.keys) != 2 || keyboard.keys[0] != "caps" || keyboard.keys[1] != "q" {
+		t.Fatalf("expected Caps Lock event and selected key, got %v", keyboard.keys)
+	}
+	if len(keyboard.text) != 1 || keyboard.text[0] != "pasted" {
+		t.Fatalf("expected pasted text to use the uinput device, got %v", keyboard.text)
+	}
+	if !state.capsLock {
+		t.Fatal("expected Caps Lock UI state to remain enabled")
+	}
+	if got := shell.String(); got != "" {
+		t.Fatalf("expected no shell input in uinput mode, got %q", got)
+	}
+}
+
+func TestUinputExtendedOperatorsUseKeypadCodes(t *testing.T) {
+	state, _ := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Keyboard.Output = "uinput"
+	state.config.Keyboard.Extended = true
+	state.y = 1
+	state.x = len(state.baseLayout()[0]) + 1 + 7
+
+	if got := state.uinputKeyAtSelection(); got != "kp-" {
+		t.Fatalf("expected extended keypad minus to map to keypad key, got %q", got)
+	}
 }
 
 func TestStickyShiftRemainsActiveUntilToggledOff(t *testing.T) {

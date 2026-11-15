@@ -86,6 +86,19 @@ settings and invalid values are reported as errors. JSON files do not support
 comments.
 
 - `shell.command` and `shell.args` select the shell and its arguments.
+- `keyboard.output` is `shell` (the default; keys go to ttyosk's shell) or
+  `uinput` (Linux only; keys are emitted as system keyboard events to the
+  currently focused application). In `uinput` mode, ttyosk does not start its
+  configured shell. Give the user access to `/dev/uinput` (often via the
+  `input` group or a udev rule). Keep ttyosk visible in its own terminal and
+  focus the application you want to type into; if ttyosk itself has focus,
+  injected keys may be read by ttyosk instead. The virtual keyboard emits
+  ordinary key events, so set `keyboard.layout` to match the system's active
+  layout; that layout determines the resulting characters. Caps Lock and Num
+  Lock change the system state. Non-ASCII clipboard text is not supported in
+  this mode. On Linux virtual consoles, run ttyosk on a separate VT and switch
+  to the target VT; the controller remains available while ttyosk's UI stays
+  on its original VT.
 - `keyboard.layout` can be `qwerty`, `dvorak`, `colemak`, or `custom`.
   `custom_layout` is an array of key rows when using `custom`; entries are the
   key labels/values supported by the virtual keyboard (one character or a
@@ -93,8 +106,9 @@ comments.
 - `keyboard.extended` adds grouped F1–F12 keys, navigation keys, and a numeric
   keypad with Num above the number columns. The keypad’s right column places
   `-` beside Num, then `*`, `/`, and `+` alongside the number rows.
-  `keyboard.num_lock` controls the keypad’s initial Num Lock state; the `Num`
-  key toggles between number and navigation behavior.
+  `keyboard.num_lock` controls the keypad’s initial Num Lock state in shell
+  mode; the `Num` key toggles it. In uinput mode, the `Num` key changes the
+  system's Num Lock state.
   `key_padding` adjusts key spacing. `sticky_modifiers` keeps Shift/Ctrl/Meta
   enabled until toggled off. `vim_navigation` toggles h/j/k/l navigation.
 - `keyboard.colors` sets ANSI colors from 0 to 255; `-1` uses the terminal

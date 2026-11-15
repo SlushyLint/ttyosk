@@ -4,6 +4,7 @@
     "args": []
   },
   "keyboard": {
+    "output": "shell",
     "layout": "qwerty",
     "custom_layout": [],
     "extended": true,

@@ -34,6 +34,9 @@ func TestLoadConfigMergesPartialJSONWithDefaults(t *testing.T) {
 	if config.Keyboard.Layout != "dvorak" || config.Keyboard.KeyPadding != 1 {
 		t.Fatalf("expected partial config to retain defaults, got %+v", config.Keyboard)
 	}
+	if config.Keyboard.Output != "shell" {
+		t.Fatalf("expected shell output by default, got %q", config.Keyboard.Output)
+	}
 	if config.Mouse.SGR || !config.Mouse.GPM {
 		t.Fatalf("expected only SGR to be disabled, got %+v", config.Mouse)
 	}
@@ -43,6 +46,7 @@ func TestLoadConfigRejectsUnknownFieldsAndInvalidValues(t *testing.T) {
 	for _, contents := range []string{
 		`{"unknown":true}`,
 		`{"keyboard":{"layout":"unknown"}}`,
+		`{"keyboard":{"output":"unknown"}}`,
 		`{"mouse":{"right_click_action":"execute"}}`,
 	} {
 		path := filepath.Join(t.TempDir(), "config.json")
@@ -52,6 +56,21 @@ func TestLoadConfigRejectsUnknownFieldsAndInvalidValues(t *testing.T) {
 		if _, err := loadConfig([]string{"--config", path}); err == nil {
 			t.Fatalf("expected config %s to be rejected", contents)
 		}
+	}
+}
+
+func TestLoadConfigEnablesUinputOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"keyboard":{"output":"uinput"},"shell":{"command":""}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := loadConfig([]string{"--config", path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Keyboard.Output != "uinput" {
+		t.Fatalf("expected uinput output, got %q", config.Keyboard.Output)
 	}
 }
 

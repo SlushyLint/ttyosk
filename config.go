@@ -27,6 +27,7 @@ type shellConfig struct {
 }
 
 type keyboardConfig struct {
+	Output          string     `json:"output"`
 	Layout          string     `json:"layout"`
 	CustomLayout    [][]string `json:"custom_layout"`
 	Extended        bool       `json:"extended"`
@@ -64,6 +65,7 @@ func defaultConfig() appConfig {
 	return appConfig{
 		Shell: shellConfig{Command: "zsh"},
 		Keyboard: keyboardConfig{
+			Output:        "shell",
 			Layout:        "qwerty",
 			NumLock:       true,
 			KeyPadding:    1,
@@ -145,8 +147,11 @@ func loadConfig(args []string) (appConfig, error) {
 }
 
 func (c appConfig) validate() error {
-	if strings.TrimSpace(c.Shell.Command) == "" {
+	if c.Keyboard.Output != "uinput" && strings.TrimSpace(c.Shell.Command) == "" {
 		return errors.New("shell.command must not be empty")
+	}
+	if c.Keyboard.Output != "shell" && c.Keyboard.Output != "uinput" {
+		return errors.New("keyboard.output must be shell or uinput")
 	}
 	switch c.Keyboard.Layout {
 	case "qwerty", "dvorak", "colemak":

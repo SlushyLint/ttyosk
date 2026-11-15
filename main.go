@@ -67,6 +67,7 @@ type keyboardState struct {
 	visibleLines int
 	selection    textSelection
 	lastError    error
+	uinput       keyboardEmitter
 }
 
 type textSelection struct {
@@ -275,18 +276,20 @@ func (s *keyboardState) activeLayout() [][]string {
 	if s.config.Clipboard.Enabled && len(layout) > 0 {
 		layout[len(layout)-1] = append(layout[len(layout)-1], "paste")
 	}
-	for rowIndex, row := range layout {
-		for col, keyName := range row {
-			if keyName == keyboardSpacer || keyName == "" {
-				continue
-			}
-			isLetter := len(keyName) == 1 && keyName[0] >= 'a' && keyName[0] <= 'z'
-			if isLetter {
-				if s.capsLock != s.shiftOnce {
-					layout[rowIndex][col] = strings.ToUpper(keyName)
+	if s.config.Keyboard.Output != "uinput" {
+		for rowIndex, row := range layout {
+			for col, keyName := range row {
+				if keyName == keyboardSpacer || keyName == "" {
+					continue
 				}
-			} else if s.shiftOnce && len(keyName) == 1 {
-				layout[rowIndex][col] = shiftValue(keyName)
+				isLetter := len(keyName) == 1 && keyName[0] >= 'a' && keyName[0] <= 'z'
+				if isLetter {
+					if s.capsLock != s.shiftOnce {
+						layout[rowIndex][col] = strings.ToUpper(keyName)
+					}
+				} else if s.shiftOnce && len(keyName) == 1 {
+					layout[rowIndex][col] = shiftValue(keyName)
+				}
 			}
 		}
 	}
@@ -484,6 +487,11 @@ func shiftValue(value string) string {
 }
 
 func (s *keyboardState) insertSelectedKey() {
+	if s.config.Keyboard.Output == "uinput" {
+		s.insertSelectedUinputKey()
+		return
+	}
+
 	selected := extendedKeyIdentity(s.currentKey())
 	if selected == "num" {
 		s.numLock = !s.numLock
@@ -582,6 +590,96 @@ func (s *keyboardState) insertSelectedKey() {
 	s.emitToShell(value)
 }
 
+func (s *keyboardState) insertSelectedUinputKey() {
+	selected := extendedKeyIdentity(s.currentKey())
+	if selected == "num" {
+		s.numLock = !s.numLock
+		s.emitUinputKey("num", 0)
+		return
+	}
+	if selected == "shift" {
+		s.shiftOnce = !s.shiftOnce
+		return
+	}
+	if selected == "caps" {
+		s.capsLock = !s.capsLock
+		s.shiftOnce = false
+		s.emitUinputKey("caps", 0)
+		return
+	}
+	if selected == "ctrl" {
+		s.ctrl = !s.ctrl
+		return
+	}
+	if selected == "meta" {
+		s.meta = !s.meta
+		return
+	}
+	if selected == "paste" {
+		s.pasteClipboard()
+		return
+	}
+
+	modifiers := uint8(0)
+	if s.shiftOnce {
+		modifiers |= uinputShift
+	}
+	if s.ctrl {
+		modifiers |= uinputCtrl
+	}
+	if s.meta {
+		modifiers |= uinputAlt
+	}
+	if !s.config.Keyboard.StickyModifiers {
+		s.shiftOnce = false
+		s.ctrl = false
+		s.meta = false
+	}
+	s.emitUinputKey(s.uinputKeyAtSelection(), modifiers)
+}
+
+func (s *keyboardState) uinputKeyAtSelection() string {
+	keyName := extendedKeyIdentity(s.currentKey())
+	row := s.y
+	if s.config.Keyboard.Extended {
+		row--
+	}
+	rows := s.baseLayout()
+	if row < 0 || row >= len(rows) || s.x < 0 {
+		return keyName
+	}
+	if s.config.Keyboard.Extended && row < len(extendedKeyRows) && s.x > len(rows[row]) {
+		sideIndex := s.x - len(rows[row]) - 1
+		if sideIndex >= 0 && sideIndex < len(extendedKeyRows[row]) {
+			switch extendedKeyRows[row][sideIndex] {
+			case "-":
+				return "kp-"
+			case "*":
+				return "kp*"
+			case "/":
+				return "kp/"
+			case "+":
+				return "kp+"
+			}
+		}
+	}
+	if (s.config.Keyboard.Layout == "dvorak" || s.config.Keyboard.Layout == "colemak") &&
+		s.x < len(rows[row]) && s.x < len(key[row]) {
+		return extendedKeyIdentity(key[row][s.x])
+	}
+	return keyName
+}
+
+func (s *keyboardState) emitUinputKey(key string, modifiers uint8) {
+	if s.uinput == nil {
+		s.lastError = fmt.Errorf("uinput keyboard is unavailable")
+		return
+	}
+	if err := s.uinput.EmitKey(key, modifiers); err != nil {
+		s.lastError = fmt.Errorf("send key with uinput keyboard: %w", err)
+	}
+}
+
 func (s *keyboardState) keypadValue(number, navigation string) string {
 	if s.numLockEnabled() {
 		return number
@@ -676,6 +774,16 @@ func (s *keyboardState) arrowSequence(keyName string, ctrl, meta bool) string {
 }
 
 func (s *keyboardState) emitToShell(value string) {
+	if s.config.Keyboard.Output == "uinput" {
+		if s.uinput == nil {
+			s.lastError = fmt.Errorf("uinput keyboard is unavailable")
+			return
+		}
+		if err := s.uinput.TypeText(value); err != nil {
+			s.lastError = fmt.Errorf("type with uinput keyboard: %w", err)
+		}
+		return
+	}
 	if s.shell == nil || value == "" {
 		return
 	}
@@ -1276,28 +1384,43 @@ func main() {
 	}
 
 	outputChanged := make(chan struct{}, 1)
-	ptmx, err := startShell(config.Shell.Command, config.Shell.Args, cols, paneRows)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ttyosk: start shell: %v\n", err)
-		os.Exit(1)
-	}
-	state.shell = ptmx
-	state.ptmx = ptmx
-	defer ptmx.Close()
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := ptmx.Read(buf)
-			if err != nil {
-				return
-			}
-			_, _ = state.terminal.Write(buf[:n])
-			select {
-			case outputChanged <- struct{}{}:
-			default:
-			}
+	if config.Keyboard.Output == "uinput" {
+		keyboard, err := newVirtualKeyboard()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ttyosk: create uinput keyboard: %v\n", err)
+			os.Exit(1)
 		}
-	}()
+		state.uinput = keyboard
+		defer func() {
+			if err := keyboard.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "ttyosk: close uinput keyboard: %v\n", err)
+			}
+		}()
+		_, _ = state.terminal.Write([]byte("uinput output active. Focus the target application to type."))
+	} else {
+		ptmx, err := startShell(config.Shell.Command, config.Shell.Args, cols, paneRows)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ttyosk: start shell: %v\n", err)
+			os.Exit(1)
+		}
+		state.shell = ptmx
+		state.ptmx = ptmx
+		defer ptmx.Close()
+		go func() {
+			buf := make([]byte, 4096)
+			for {
+				n, err := ptmx.Read(buf)
+				if err != nil {
+					return
+				}
+				_, _ = state.terminal.Write(buf[:n])
+				select {
+				case outputChanged <- struct{}{}:
+				default:
+				}
+			}
+		}()
+	}
 
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
