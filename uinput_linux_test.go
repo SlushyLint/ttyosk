@@ -74,4 +74,21 @@ func TestUinputEmitsSynchronizedModifierAndKeyEvents(t *testing.T) {
 			t.Errorf("event %d = %v, want %v", i, got, expected)
 		}
 	}
+
+}
+
+func TestEvdevKeyboardDetectionExcludesGamepads(t *testing.T) {
+	keyboardBits := make([]byte, evdevKeyBitBytes)
+	for _, code := range []int{28, 29, 30, 42, 44, 57} {
+		keyboardBits[code/8] |= 1 << uint(code%8)
+	}
+	if !evdevKeyboardBits(keyboardBits) {
+		t.Fatal("expected a standard keyboard to be detected")
+	}
+
+	gamepadBits := append([]byte(nil), keyboardBits...)
+	gamepadBits[evdevBtnGamepad/8] |= 1 << uint(evdevBtnGamepad%8)
+	if evdevKeyboardBits(gamepadBits) {
+		t.Fatal("expected a gamepad with keyboard-like keys to be excluded")
+	}
 }

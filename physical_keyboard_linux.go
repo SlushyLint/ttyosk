@@ -19,8 +19,9 @@ import (
 
 const (
 	evdevKeyEventType = 1
-	evdevKeyA         = 30
 	evdevKeyBitBytes  = 96
+	evdevBtnJoystick  = 0x120
+	evdevBtnGamepad   = 0x130
 	evdevGrab         = 0x40044590
 	evdevIOCRead      = 2
 	evdevIOCType      = 'E'
@@ -59,7 +60,7 @@ func startPhysicalKeyboardCapture(events chan<- physicalKeyEvent) (*physicalKeyb
 			_ = device.Close()
 			continue
 		}
-		isKeyboard, err := evdevHasKey(device, evdevKeyA)
+		isKeyboard, err := evdevIsKeyboard(device)
 		if err != nil {
 			_ = device.Close()
 			return fail(fmt.Errorf("inspect input device %s: %w", path, err))
@@ -91,13 +92,32 @@ func evdevDeviceName(device *os.File) (string, error) {
 	return strings.TrimRight(string(name), "\x00"), nil
 }
 
-func evdevHasKey(device *os.File, code int) (bool, error) {
+func evdevIsKeyboard(device *os.File) (bool, error) {
 	bits := make([]byte, evdevKeyBitBytes)
 	request := evdevReadRequest(evdevGetBits+evdevKeyEventType, len(bits))
 	if err := evdevIoctl(int(device.Fd()), request, bits); err != nil {
 		return false, err
 	}
-	return bits[code/8]&(1<<uint(code%8)) != 0, nil
+	return evdevKeyboardBits(bits), nil
+}
+
+func evdevKeyboardBits(bits []byte) bool {
+	if len(bits) < evdevKeyBitBytes {
+		return false
+	}
+	if hasEvdevKey(bits, evdevBtnJoystick) || hasEvdevKey(bits, evdevBtnGamepad) {
+		return false
+	}
+	for _, code := range []int{28, 29, 30, 42, 44, 57} {
+		if !hasEvdevKey(bits, code) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasEvdevKey(bits []byte, code int) bool {
+	return bits[code/8]&(1<<uint(code%8)) != 0
 }
 
 func evdevReadRequest(number, size int) uintptr {

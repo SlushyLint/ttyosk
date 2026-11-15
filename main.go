@@ -1574,6 +1574,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "ttyosk: capture physical keyboard: %v\n", err)
 			return
 		}
+		for _, device := range capture.files {
+			fmt.Fprintf(os.Stderr, "ttyosk: grabbed physical keyboard %s\n", device.Name())
+		}
 		defer func() {
 			if err := capture.Close(); err != nil {
 				fmt.Fprintf(os.Stderr, "ttyosk: release physical keyboard: %v\n", err)
