@@ -1,7 +1,7 @@
 {
   "shell": {
     "command": "zsh",
-    "args": []
+   "args": []
   },
   "keyboard": {
     "output": "uinput",

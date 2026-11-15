@@ -88,8 +88,10 @@ comments.
 - `ttyosk -vt=true` attaches the controller keyboard to the current terminal
   session. ttyosk runs its keyboard UI in the background, reserves the
   terminal's bottom rows for the interface, and sends key events to the
-  foreground process on that tty (including a getty login prompt). It grabs
-  physical keyboards and does not pass their other keys through. Physical
+  foreground process on that tty (including a getty login prompt). On a Linux
+  virtual console, it grabs physical keyboards only while its target VT is
+  active; switching away releases them, and controller input is ignored until
+  the target VT is active again. Ctrl+Alt+F1–F12 switches VTs. Physical
   `h/j/k/l` and arrow keys move the selection; Space or Enter activates a
   virtual key; Escape exits. This overrides `keyboard.output`. ttyosk needs
   access to `/dev/input/event*` and `/dev/uinput`. Press the controller's
@@ -101,8 +103,9 @@ comments.
   the service as a user allowed to write to `/dev/tty2` and `/dev/uinput` and
   read/grab `/dev/input/event*`.
   Keep the getty enabled on that tty; getty provides the login prompt and
-  shell, while ttyosk draws the keyboard and supplies input. The target VT
-  must be active for injected keys to reach it.
+  shell, while ttyosk draws the keyboard and supplies input. ttyosk grabs
+  physical keyboards only while that VT is active, so other VTs continue to
+  receive normal keyboard input.
 - `ttyosk -vt=false` starts ttyosk's own shell in a PTY, as in the original
   mode, even if `keyboard.output` is set to `uinput`. Boolean values can also
   be abbreviated as `-vt=t` and `-vt=f`. Without `-vt`, the configured

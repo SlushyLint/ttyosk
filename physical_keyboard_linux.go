@@ -30,18 +30,23 @@ const (
 )
 
 type physicalKeyboardCapture struct {
-	files []*os.File
-	done  chan struct{}
-	once  sync.Once
+	files   []*os.File
+	done    chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	grabbed map[*os.File]bool
 }
 
-func startPhysicalKeyboardCapture(events chan<- physicalKeyEvent) (*physicalKeyboardCapture, error) {
+func startPhysicalKeyboardCapture(events chan<- physicalKeyEvent, grab bool) (*physicalKeyboardCapture, error) {
 	paths, err := filepath.Glob("/dev/input/event*")
 	if err != nil {
 		return nil, fmt.Errorf("find keyboard input devices: %w", err)
 	}
 
-	capture := &physicalKeyboardCapture{done: make(chan struct{})}
+	capture := &physicalKeyboardCapture{
+		done:    make(chan struct{}),
+		grabbed: make(map[*os.File]bool),
+	}
 	fail := func(err error) (*physicalKeyboardCapture, error) {
 		_ = capture.Close()
 		return nil, err
@@ -69,10 +74,6 @@ func startPhysicalKeyboardCapture(events chan<- physicalKeyEvent) (*physicalKeyb
 			_ = device.Close()
 			continue
 		}
-		if err := unix.IoctlSetInt(int(device.Fd()), evdevGrab, 1); err != nil {
-			_ = device.Close()
-			return fail(fmt.Errorf("grab keyboard %s (%s): %w", name, path, err))
-		}
 		capture.files = append(capture.files, device)
 	}
 	if len(capture.files) == 0 {
@@ -80,6 +81,11 @@ func startPhysicalKeyboardCapture(events chan<- physicalKeyEvent) (*physicalKeyb
 	}
 	for _, device := range capture.files {
 		go capture.readEvents(device, events)
+	}
+	if grab {
+		if err := capture.SetGrabbed(true); err != nil {
+			return fail(err)
+		}
 	}
 	return capture, nil
 }
@@ -165,14 +171,42 @@ func (capture *physicalKeyboardCapture) Close() error {
 	var result error
 	capture.once.Do(func() {
 		close(capture.done)
+		capture.mu.Lock()
+		defer capture.mu.Unlock()
 		for _, device := range capture.files {
-			if err := unix.IoctlSetInt(int(device.Fd()), evdevGrab, 0); err != nil {
-				result = errors.Join(result, fmt.Errorf("release keyboard %s: %w", device.Name(), err))
+			if capture.grabbed[device] {
+				if err := unix.IoctlSetInt(int(device.Fd()), evdevGrab, 0); err != nil {
+					result = errors.Join(result, fmt.Errorf("release keyboard %s: %w", device.Name(), err))
+				}
 			}
 			if err := device.Close(); err != nil {
 				result = errors.Join(result, fmt.Errorf("close keyboard %s: %w", device.Name(), err))
 			}
 		}
 	})
+	return result
+}
+
+func (capture *physicalKeyboardCapture) SetGrabbed(grab bool) error {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+
+	var result error
+	value := 0
+	action := "release"
+	if grab {
+		value = 1
+		action = "grab"
+	}
+	for _, device := range capture.files {
+		if capture.grabbed[device] == grab {
+			continue
+		}
+		if err := unix.IoctlSetInt(int(device.Fd()), evdevGrab, value); err != nil {
+			result = errors.Join(result, fmt.Errorf("%s keyboard %s: %w", action, device.Name(), err))
+			continue
+		}
+		capture.grabbed[device] = grab
+	}
 	return result
 }

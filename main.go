@@ -1566,19 +1566,40 @@ func main() {
 	controllerEvents := make(chan gamepadEvent, 32)
 	go watchGamepads(controllerEvents)
 
+	var vtKeyboardFocus *vtFocus
+	vtActive := true
+	if vtOverlay {
+		focus, supported, err := newVTFocus(int(os.Stdout.Fd()))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+			return
+		}
+		if supported {
+			vtKeyboardFocus = focus
+			vtActive, err = vtKeyboardFocus.isActive()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ttyosk: query active virtual terminal: %v\n", err)
+				return
+			}
+		}
+	}
+
 	var physicalKeys <-chan physicalKeyEvent
+	var physicalCapture *physicalKeyboardCapture
 	if vtOverlay {
 		keyEvents := make(chan physicalKeyEvent, 64)
-		capture, err := startPhysicalKeyboardCapture(keyEvents)
+		physicalCapture, err = startPhysicalKeyboardCapture(keyEvents, vtKeyboardFocus == nil || vtActive)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ttyosk: capture physical keyboard: %v\n", err)
 			return
 		}
-		for _, device := range capture.files {
-			fmt.Fprintf(os.Stderr, "ttyosk: grabbed physical keyboard %s\n", device.Name())
+		if vtKeyboardFocus == nil || vtActive {
+			for _, device := range physicalCapture.files {
+				fmt.Fprintf(os.Stderr, "ttyosk: grabbed physical keyboard %s\n", device.Name())
+			}
 		}
 		defer func() {
-			if err := capture.Close(); err != nil {
+			if err := physicalCapture.Close(); err != nil {
 				fmt.Fprintf(os.Stderr, "ttyosk: release physical keyboard: %v\n", err)
 			}
 		}()
@@ -1604,6 +1625,55 @@ func main() {
 		resizeTicker = time.NewTicker(time.Second)
 		resizeTick = resizeTicker.C
 		defer resizeTicker.Stop()
+	}
+	var focusTicker *time.Ticker
+	var focusTick <-chan time.Time
+	if vtKeyboardFocus != nil {
+		focusTicker = time.NewTicker(50 * time.Millisecond)
+		focusTick = focusTicker.C
+		defer focusTicker.Stop()
+	}
+
+	updateVTFocus := func() bool {
+		if vtKeyboardFocus == nil {
+			return true
+		}
+		active, err := vtKeyboardFocus.isActive()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ttyosk: query active virtual terminal: %v\n", err)
+			return false
+		}
+		if active == vtActive {
+			return true
+		}
+		if active {
+			for len(physicalKeys) > 0 {
+				<-physicalKeys
+			}
+			for len(controllerEvents) > 0 {
+				<-controllerEvents
+			}
+		}
+		if err := physicalCapture.SetGrabbed(active); err != nil {
+			fmt.Fprintf(os.Stderr, "ttyosk: update physical keyboard capture: %v\n", err)
+			return false
+		}
+		vtActive = active
+		if active {
+			for _, device := range physicalCapture.files {
+				fmt.Fprintf(os.Stderr, "ttyosk: grabbed physical keyboard %s\n", device.Name())
+			}
+			if err := state.drawVTOverlay(); err != nil {
+				fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+				return false
+			}
+		} else {
+			vtKeyboardFocus.resetModifiers()
+			for _, device := range physicalCapture.files {
+				fmt.Fprintf(os.Stderr, "ttyosk: released physical keyboard %s while tty is inactive\n", device.Name())
+			}
+		}
+		return true
 	}
 
 	for {
@@ -1634,6 +1704,12 @@ func main() {
 				fmt.Fprintf(os.Stderr, "ttyosk: controller: %v\n", event.err)
 				continue
 			}
+			if !updateVTFocus() {
+				return
+			}
+			if vtKeyboardFocus != nil && !vtActive {
+				continue
+			}
 			if vtOverlay && event.exit {
 				return
 			}
@@ -1654,6 +1730,21 @@ func main() {
 				}
 			}
 		case event := <-physicalKeys:
+			if !updateVTFocus() {
+				return
+			}
+			if vtKeyboardFocus != nil && !vtActive {
+				continue
+			}
+			if vtKeyboardFocus != nil {
+				handled, err := vtKeyboardFocus.handleSwitchKey(event)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+				}
+				if handled {
+					continue
+				}
+			}
 			if state.handlePhysicalKey(event) {
 				return
 			}
@@ -1663,6 +1754,10 @@ func main() {
 					fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
 					return
 				}
+			}
+		case <-focusTick:
+			if !updateVTFocus() {
+				return
 			}
 		case receivedSignal := <-signals:
 			if receivedSignal != syscall.SIGWINCH {
