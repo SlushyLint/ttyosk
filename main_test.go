@@ -150,6 +150,140 @@ func TestDefaultLettersAreLowercase(t *testing.T) {
 	assertShellInput(t, shell, "q")
 }
 
+func TestDvorakLayoutChangesTypedKey(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Keyboard.Layout = "dvorak"
+	state.x, state.y = 1, 1
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "'")
+}
+
+func TestStickyShiftRemainsActiveUntilToggledOff(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Keyboard.StickyModifiers = true
+	state.x, state.y = 0, 3
+	state.insertSelectedKey()
+	state.x, state.y = 1, 1
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "Q")
+	if !state.shiftOnce {
+		t.Fatal("expected sticky Shift to remain enabled")
+	}
+	state.x, state.y = 0, 3
+	state.insertSelectedKey()
+	if state.shiftOnce {
+		t.Fatal("expected toggling Shift again to disable it")
+	}
+}
+
+func TestExtendedLayoutIncludesNavigationAndFunctionKeys(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Keyboard.Extended = true
+	layout := state.activeLayout()
+	if len(layout) != len(key)+1 || layout[0][0] != "F1" {
+		t.Fatalf("expected extended layout to include a function-key row, got %v", layout)
+	}
+	state.x, state.y = 17, 1
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x1b[H")
+}
+
+func TestCustomLayoutAndFunctionKeyOutput(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Keyboard.Layout = "custom"
+	state.config.Keyboard.CustomLayout = [][]string{{"F1", "x", "SPACE"}}
+	state.x, state.y = 0, 0
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x1bOP")
+	state.x = 1
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "x")
+}
+
+func TestConfiguredRightClickBackspacesAndSGRCanBeDisabled(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Mouse.RightClickAction = "backspace"
+	state.keyAreas = []keyHitArea{{left: 20, right: 26, x: 12, y: 18, row: 2}}
+	rightClick := []byte("\033[<2;23;18M")
+	state.applyInput(rightClick, len(rightClick))
+	assertShellInput(t, shell, "\x7f")
+
+	state.config.Mouse.SGR = false
+	state.applyInput([]byte("\033[<0;23;18M"), len("\033[<0;23;18M"))
+	assertShellInput(t, shell, "")
+}
+
+func TestSelectedTextUsesTerminalCellRange(t *testing.T) {
+	state, _ := newTestKeyboardState()
+	state.terminal = vt10x.New(vt10x.WithSize(8, 2))
+	_, _ = state.terminal.Write([]byte("hello"))
+	state.selection = textSelection{startX: 1, startY: 1, endX: 5, endY: 1}
+	if got := state.selectedText(); got != "hello" {
+		t.Fatalf("expected selected terminal text %q, got %q", "hello", got)
+	}
+}
+
+func TestClipboardShiftDragTracksTextSelection(t *testing.T) {
+	state, _ := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Clipboard.Enabled = true
+	state.visibleLines = 5
+
+	start := []byte("\033[<4;2;1M")
+	state.applyInput(start, len(start))
+	if !state.selection.active {
+		t.Fatal("expected Shift+left press to start selection")
+	}
+
+	drag := []byte("\033[<36;5;1M")
+	state.applyInput(drag, len(drag))
+	if state.selection.endX != 5 || state.selection.endY != 1 {
+		t.Fatalf("expected selection to extend to 5,1; got %d,%d", state.selection.endX, state.selection.endY)
+	}
+}
+
+func TestClipboardPasteUsesConfiguredCommand(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Clipboard.Enabled = true
+	state.config.Clipboard.PasteCommand = []string{"/bin/echo", "-n", "pasted"}
+	state.pasteClipboard()
+	state.reportError()
+	assertShellInput(t, shell, "pasted")
+}
+
+func TestHighContrastThemeUsesConfiguredPalette(t *testing.T) {
+	var frame strings.Builder
+	writeKeyboardCellWithTheme(&frame, " key ", false, false, highContrastTheme())
+	if got, want := frame.String(), "\033[97;40m key \033[0m"; got != want {
+		t.Fatalf("expected high-contrast color sequence %q, got %q", want, got)
+	}
+}
+
+func TestInputDecoderHandlesFragmentedAndConcatenatedMouseReports(t *testing.T) {
+	decoder := inputDecoder{}
+	if events := decoder.feed([]byte("\033[<35;23;")); len(events) != 0 {
+		t.Fatalf("expected incomplete mouse report to be buffered, got %q", events)
+	}
+	events := decoder.feed([]byte("18M\033[<0;24;18M"))
+	if len(events) != 2 || string(events[0]) != "\033[<35;23;18M" || string(events[1]) != "\033[<0;24;18M" {
+		t.Fatalf("expected both complete mouse reports, got %q", events)
+	}
+}
+
+func TestInputDecoderEmitsStandaloneEscape(t *testing.T) {
+	decoder := inputDecoder{}
+	events := decoder.feed([]byte{27})
+	if len(events) != 1 || len(events[0]) != 1 || events[0][0] != 27 {
+		t.Fatalf("expected standalone Escape to be emitted immediately, got %q", events)
+	}
+}
+
 func TestVirtualKeyboardTypesAndReturnSubmits(t *testing.T) {
 	state, shell := newTestKeyboardState()
 	for _, position := range [][2]int{{3, 1}, {3, 3}, {6, 2}, {9, 1}} {
@@ -171,6 +305,51 @@ func TestMouseClickActivatesVirtualReturn(t *testing.T) {
 	state.applyInput(event, len(event))
 
 	assertShellInput(t, shell, "\r")
+}
+
+func TestMouseHoverHighlightsKeyAndOnlyPressActivatesIt(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.keyAreas = []keyHitArea{{left: 20, right: 26, x: 12, y: 18, row: 2}}
+
+	motion := []byte("\033[<35;23;18M")
+	state.applyInput(motion, len(motion))
+	if state.x != 12 || state.y != 2 {
+		t.Fatalf("expected mouse hover to select key at row 2, column 12; got row %d, column %d", state.y, state.x)
+	}
+	assertShellInput(t, shell, "")
+
+	release := []byte("\033[<0;23;18m")
+	state.applyInput(release, len(release))
+	assertShellInput(t, shell, "")
+
+	press := []byte("\033[<0;23;18M")
+	state.applyInput(press, len(press))
+	assertShellInput(t, shell, "\r")
+}
+
+func TestGPMEventSelectsAndActivatesKey(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.keyAreas = []keyHitArea{{left: 20, right: 26, x: 12, y: 18, row: 2}}
+
+	state.handleGPMEvent(gpmEvent{x: 23, y: 18})
+	if state.x != 12 || state.y != 2 {
+		t.Fatalf("expected GPM pointer to select key at row 2, column 12; got row %d, column %d", state.y, state.x)
+	}
+	assertShellInput(t, shell, "")
+
+	state.handleGPMEvent(gpmEvent{x: 23, y: 18, pressed: true})
+	assertShellInput(t, shell, "\r")
+}
+
+func TestNonLeftMousePressStillReachesMouseReportingProgram(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.terminal = vt10x.New(vt10x.WithSize(80, 18))
+	_, _ = state.terminal.Write([]byte("\033[?1000h"))
+	state.keyAreas = []keyHitArea{{left: 20, right: 26, x: 12, y: 18, row: 2}}
+
+	event := []byte("\033[<2;23;18M")
+	state.applyInput(event, len(event))
+	assertShellInput(t, shell, string(event))
 }
 
 func TestVirtualSpecialKeysAndModifiers(t *testing.T) {

@@ -6,8 +6,9 @@
 
 - Go 1.27.1 or newer.
 - Linux or another Unix-like system that supports pseudo-terminals and `SIGWINCH`. Windows is not supported by the current implementation.
-- `zsh` installed and available as `zsh` on `PATH`.
-- A UTF-8 terminal emulator with ANSI/VT control-sequence and SGR mouse-reporting support. Mouse clicks on the displayed keys require SGR mouse reporting.
+- `zsh` installed and available on `PATH` by default; `shell.command` can select another installed shell.
+- A UTF-8 terminal emulator with ANSI/VT control-sequence and SGR mouse-reporting support. Mouse hover and clicks on displayed keys use SGR mouse reporting, which works through terminal emulators running under X11 or Wayland.
+- On the Linux virtual console, an active GPM daemon can provide mouse hover and click input. GPM support is optional; no extra Go dependency is required.
 - An 80-column by 24-row terminal is recommended. Smaller windows may cause the keyboard layout to wrap or overlap.
 
 ## Dependencies
@@ -73,9 +74,39 @@ go run .
 The application launches `zsh` in a PTY. Shell output appears above the virtual
 keyboard. Resizing the terminal resizes the shell PTY as well.
 
+## Configuration
+
+`ttyosk` loads JSON settings from `$XDG_CONFIG_HOME/ttyosk/config.json`, or
+`~/.config/ttyosk/config.json` when `XDG_CONFIG_HOME` is unset. Missing default
+config files use the built-in defaults. To use a different file, run
+`ttyosk --config /path/to/config.json`. [config.example.json](./config.example.json)
+shows every available setting; copy it to your config path and edit it. Unknown
+settings and invalid values are reported as errors. JSON files do not support
+comments.
+
+- `shell.command` and `shell.args` select the shell and its arguments.
+- `keyboard.layout` can be `qwerty`, `dvorak`, `colemak`, or `custom`.
+  `custom_layout` is an array of key rows when using `custom`; entries are the
+  key labels/values supported by the virtual keyboard (one character or a
+  named key such as `SPACE`, `return`, `ctrl`, or `F1`).
+- `keyboard.extended` adds F1–F12, navigation keys, and a numeric keypad.
+  `key_padding` adjusts key spacing. `sticky_modifiers` keeps Shift/Ctrl/Meta
+  enabled until toggled off. `vim_navigation` toggles h/j/k/l navigation.
+- `keyboard.colors` sets ANSI colors from 0 to 255; `-1` uses the terminal
+  default. `high_contrast` selects a high-contrast palette.
+- `mouse.sgr` and `mouse.gpm` independently enable terminal SGR and Linux
+  virtual-console GPM input. `hover_highlight` controls hover tracking.
+  `right_click_action` is `none` or `backspace`.
+- `clipboard.enabled` adds a Paste key and enables Shift-drag selection in the
+  shell pane. Copy uses `wl-copy`, `xclip`, or `xsel` when available, then
+  falls back to OSC 52; `copy_command` can override the detected command.
+  Paste automatically uses `wl-paste`, `xclip`, `xsel`, or `pbpaste` when
+  available; `paste_command` can override the detected command. Commands are
+  arrays, for example `["wl-paste", "--no-newline"]`.
+
 ## Keyboard Controls
 
-- Click a displayed key to type it. The terminal emulator must support SGR mouse reporting for clicks.
+- Move the mouse over a displayed key to highlight it, then click to type it. Terminal-emulator mouse support requires SGR mouse reporting; on the Linux virtual console, GPM can provide it instead.
 - Use the physical arrow keys, or `h`, `j`, `k`, and `l`, to move the selection. Press Space or physical Enter to activate the selected virtual key.
 - The virtual Return key submits the current command to the shell.
 - Virtual Shift, Ctrl, and Meta apply to the next keypress; active one-shot modifiers are highlighted blue. Activate a modifier again before using it to turn it off. Ctrl and Meta can be combined or toggled off independently; Meta sends an Escape prefix before the key. The `caps` key toggles Caps Lock for letters and stays highlighted blue while enabled; Shift temporarily reverses Caps Lock for one character. Virtual Esc, Tab, and arrow keys send those keys to the shell.
