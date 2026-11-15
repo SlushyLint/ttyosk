@@ -81,6 +81,8 @@ func (d *joystickDecoder) decode(data []byte) (gamepadEvent, bool) {
 			return gamepadEvent{selectKey: true}, true
 		case 1:
 			return gamepadEvent{backspace: true}, true
+		case 9:
+			return gamepadEvent{exit: true}, true
 		case 12:
 			return gamepadEvent{dy: -1}, true
 		case 13:

@@ -31,6 +31,7 @@ func TestJoystickDecoderMapsAxesAndButtons(t *testing.T) {
 		{name: "select", data: joystickTestEvent(jsEventButton, 0, 1), want: gamepadEvent{selectKey: true}, wantEvent: true},
 		{name: "select release", data: joystickTestEvent(jsEventButton, 0, 0)},
 		{name: "backspace", data: joystickTestEvent(jsEventButton, 1, 1), want: gamepadEvent{backspace: true}, wantEvent: true},
+		{name: "start exits overlay", data: joystickTestEvent(jsEventButton, 9, 1), want: gamepadEvent{exit: true}, wantEvent: true},
 		{name: "dpad right", data: joystickTestEvent(jsEventButton, 15, 1), want: gamepadEvent{dx: 1}, wantEvent: true},
 		{name: "initialization events ignored", data: joystickTestEvent(jsEventAxis|jsEventInit, 1, -32767)},
 	}

@@ -19,6 +19,9 @@ type appConfig struct {
 	Keyboard  keyboardConfig  `json:"keyboard"`
 	Mouse     mouseConfig     `json:"mouse"`
 	Clipboard clipboardConfig `json:"clipboard"`
+	VTMode    bool            `json:"-"`
+	VTModeSet bool            `json:"-"`
+	VTChild   bool            `json:"-"`
 }
 
 type shellConfig struct {
@@ -103,6 +106,8 @@ func loadConfig(args []string) (appConfig, error) {
 	flags := flag.NewFlagSet("ttyosk", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "", "path to JSON configuration file")
+	vtMode := flags.Bool("vt", false, "type into the current terminal session")
+	vtChild := flags.Bool("vt-child", false, "")
 	if err := flags.Parse(args); err != nil {
 		return appConfig{}, err
 	}
@@ -111,6 +116,20 @@ func loadConfig(args []string) (appConfig, error) {
 	}
 
 	config := defaultConfig()
+	config.VTMode = *vtMode
+	config.VTChild = *vtChild
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "vt" {
+			config.VTModeSet = true
+		}
+	})
+	if config.VTModeSet {
+		if config.VTMode {
+			config.Keyboard.Output = "uinput"
+		} else {
+			config.Keyboard.Output = "shell"
+		}
+	}
 	path := *configPath
 	if path == "" {
 		var err error
@@ -139,6 +158,13 @@ func loadConfig(args []string) (appConfig, error) {
 			return appConfig{}, fmt.Errorf("parse config %q: multiple JSON values", path)
 		}
 		return appConfig{}, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	if config.VTModeSet {
+		if config.VTMode {
+			config.Keyboard.Output = "uinput"
+		} else {
+			config.Keyboard.Output = "shell"
+		}
 	}
 	if err := config.validate(); err != nil {
 		return appConfig{}, fmt.Errorf("invalid config %q: %w", path, err)

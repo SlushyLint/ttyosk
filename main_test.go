@@ -247,6 +247,23 @@ func TestUinputExtendedOperatorsUseKeypadCodes(t *testing.T) {
 	}
 }
 
+func TestVTOverlayFramePreservesShellAndReservesKeyboardRows(t *testing.T) {
+	state := keyboardState{config: defaultConfig()}
+	frame, err := state.vtOverlayFrame(80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(frame, "\033[1;19r") {
+		t.Fatalf("expected scroll area to stop above keyboard, frame: %q", frame)
+	}
+	if strings.Contains(frame, "\033[2J") {
+		t.Fatal("expected VT overlay to preserve the existing shell screen")
+	}
+	if !strings.Contains(frame, "\033[20;1H\033[2K") {
+		t.Fatal("expected keyboard rows to be drawn at the bottom of the terminal")
+	}
+}
+
 func TestStickyShiftRemainsActiveUntilToggledOff(t *testing.T) {
 	state, shell := newTestKeyboardState()
 	state.config = defaultConfig()

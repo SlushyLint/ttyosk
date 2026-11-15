@@ -74,6 +74,55 @@ func TestLoadConfigEnablesUinputOutput(t *testing.T) {
 	}
 }
 
+func TestVTFlagSelectsCurrentTerminalOrPTYOutput(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantVT     bool
+		wantOutput string
+	}{
+		{name: "VT mode", args: []string{"-vt=true"}, wantVT: true, wantOutput: "uinput"},
+		{name: "PTY mode", args: []string{"-vt=false"}, wantOutput: "shell"},
+		{name: "short true value", args: []string{"-vt=t"}, wantVT: true, wantOutput: "uinput"},
+		{name: "short false value", args: []string{"-vt=f"}, wantOutput: "shell"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			config, err := loadConfig(test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config.VTMode != test.wantVT || config.Keyboard.Output != test.wantOutput {
+				t.Fatalf("got VT mode %t and output %q", config.VTMode, config.Keyboard.Output)
+			}
+		})
+	}
+}
+
+func TestVTFlagOverridesConfiguredOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"keyboard":{"output":"uinput"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		flag string
+		want string
+	}{
+		{flag: "-vt=true", want: "uinput"},
+		{flag: "-vt=false", want: "shell"},
+	} {
+		config, err := loadConfig([]string{"--config", path, test.flag})
+		if err != nil {
+			t.Fatalf("%s: %v", test.flag, err)
+		}
+		if config.Keyboard.Output != test.want {
+			t.Errorf("%s selected output %q, want %q", test.flag, config.Keyboard.Output, test.want)
+		}
+	}
+}
+
 func TestLoadConfigRequiresExplicitFileToExist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.json")
 	if _, err := loadConfig([]string{"--config", path}); err == nil {

@@ -85,6 +85,16 @@ shows every available setting; copy it to your config path and edit it. Unknown
 settings and invalid values are reported as errors. JSON files do not support
 comments.
 
+- `ttyosk -vt=true` attaches the controller keyboard to the current terminal
+  session. ttyosk starts its keyboard UI in the background, reserves the
+  terminal's bottom rows for the interface, and sends key events to the
+  foreground shell. This overrides `keyboard.output`. `/dev/uinput` must be
+  writable by your user. Press the controller's Start button to stop the
+  overlay.
+- `ttyosk -vt=false` starts ttyosk's own shell in a PTY, as in the original
+  mode, even if `keyboard.output` is set to `uinput`. Boolean values can also
+  be abbreviated as `-vt=t` and `-vt=f`. Without `-vt`, the configured
+  `keyboard.output` behavior is unchanged.
 - `shell.command` and `shell.args` select the shell and its arguments.
 - `keyboard.output` is `shell` (the default; keys go to ttyosk's shell) or
   `uinput` (Linux only; keys are emitted as system keyboard events to the

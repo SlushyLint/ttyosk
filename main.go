@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/creack/pty"
@@ -68,6 +69,9 @@ type keyboardState struct {
 	selection    textSelection
 	lastError    error
 	uinput       keyboardEmitter
+	vtOverlay    bool
+	vtStarted    bool
+	vtRows       int
 }
 
 type textSelection struct {
@@ -109,6 +113,7 @@ type gamepadEvent struct {
 	dy        int
 	selectKey bool
 	backspace bool
+	exit      bool
 	err       error
 }
 
@@ -1083,6 +1088,63 @@ func (s *keyboardState) renderKeyboardRows(layout [][]string) [][]renderedKeyCel
 	return rendered
 }
 
+func (s *keyboardState) vtOverlayFrame(cols, rows int) (string, error) {
+	layout := s.activeLayout()
+	keyboardStartY := rows - len(layout) + 1
+	if cols <= 0 || keyboardStartY <= 1 {
+		return "", fmt.Errorf("terminal is too small for VT keyboard overlay")
+	}
+	s.terminalCols = cols
+	s.visibleLines = keyboardStartY - 1
+	s.vtRows = rows
+
+	var frame strings.Builder
+	if !s.vtStarted {
+		frame.WriteString("\0337")
+		frame.WriteString(fmt.Sprintf("\033[1;%dr", keyboardStartY-1))
+		frame.WriteString("\0338")
+		s.vtStarted = true
+	}
+	frame.WriteString("\0337")
+	s.drawKeyboardRows(&frame, cols, keyboardStartY)
+	frame.WriteString("\0338")
+	return frame.String(), nil
+}
+
+func (s *keyboardState) drawVTOverlay() error {
+	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return fmt.Errorf("get terminal size for VT overlay: %w", err)
+	}
+	frame, err := s.vtOverlayFrame(cols, rows)
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(os.Stdout, frame); err != nil {
+		return fmt.Errorf("draw VT keyboard overlay: %w", err)
+	}
+	return nil
+}
+
+func (s *keyboardState) restoreVTOverlay() error {
+	if !s.vtStarted {
+		return nil
+	}
+	layout := s.activeLayout()
+	keyboardStartY := s.vtRows - len(layout) + 1
+	var frame strings.Builder
+	frame.WriteString("\0337\033[r")
+	for row := 0; row < len(layout); row++ {
+		frame.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", keyboardStartY+row))
+	}
+	frame.WriteString("\033[0m\0338")
+	if _, err := io.WriteString(os.Stdout, frame.String()); err != nil {
+		return fmt.Errorf("restore terminal after VT keyboard overlay: %w", err)
+	}
+	s.vtStarted = false
+	return nil
+}
+
 func maxInt(first, second int) int {
 	if first > second {
 		return first
@@ -1148,7 +1210,22 @@ func (s *keyboardState) draw() {
 	s.drawTerminal(&frame, cols, visibleLines)
 
 	keyboardStartY := rows - len(layout) + 1
+	s.drawKeyboardRows(&frame, cols, keyboardStartY)
 
+	if s.terminal != nil {
+		s.terminal.Lock()
+		cursor := s.terminal.Cursor()
+		cursorVisible := s.terminal.CursorVisible()
+		s.terminal.Unlock()
+		if cursorVisible && cursor.Y < visibleLines {
+			frame.WriteString(fmt.Sprintf("\033[?25h\033[%d;%dH", cursor.Y+1, cursor.X+1))
+		}
+	}
+	_, _ = os.Stdout.Write([]byte(frame.String()))
+}
+
+func (s *keyboardState) drawKeyboardRows(frame *strings.Builder, cols, keyboardStartY int) {
+	layout := s.activeLayout()
 	s.keyAreas = nil
 	theme := s.keyTheme()
 	renderedRows := s.renderKeyboardRows(layout)
@@ -1193,17 +1270,6 @@ func (s *keyboardState) draw() {
 		}
 		frame.WriteString(line.String())
 	}
-
-	if s.terminal != nil {
-		s.terminal.Lock()
-		cursor := s.terminal.Cursor()
-		cursorVisible := s.terminal.CursorVisible()
-		s.terminal.Unlock()
-		if cursorVisible && cursor.Y < visibleLines {
-			frame.WriteString(fmt.Sprintf("\033[?25h\033[%d;%dH", cursor.Y+1, cursor.X+1))
-		}
-	}
-	_, _ = os.Stdout.Write([]byte(frame.String()))
 }
 
 func writeKeyboardCell(frame *strings.Builder, cell string, selected, activeModifier bool) {
@@ -1366,6 +1432,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
 		os.Exit(2)
 	}
+	if config.VTMode && !config.VTChild {
+		if !term.IsTerminal(int(os.Stdout.Fd())) {
+			fmt.Fprintln(os.Stderr, "ttyosk: -vt=true requires a terminal")
+			os.Exit(2)
+		}
+		pid, err := startVTOverlay(os.Args[1:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "ttyosk: VT keyboard running in background (pid %d); press controller Start to stop it\n", pid)
+		return
+	}
+	if config.VTChild && !config.VTMode {
+		fmt.Fprintln(os.Stderr, "ttyosk: internal VT child requires -vt=true")
+		os.Exit(2)
+	}
+	vtOverlay := config.VTMode && config.VTChild
 	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || cols <= 0 {
 		cols = 80
@@ -1378,9 +1462,12 @@ func main() {
 		paneRows = 1
 	}
 	state := keyboardState{
-		terminal: vt10x.New(vt10x.WithSize(cols, paneRows)),
-		config:   config,
-		numLock:  config.Keyboard.NumLock,
+		config:    config,
+		numLock:   config.Keyboard.NumLock,
+		vtOverlay: vtOverlay,
+	}
+	if !vtOverlay {
+		state.terminal = vt10x.New(vt10x.WithSize(cols, paneRows))
 	}
 
 	outputChanged := make(chan struct{}, 1)
@@ -1396,7 +1483,9 @@ func main() {
 				fmt.Fprintf(os.Stderr, "ttyosk: close uinput keyboard: %v\n", err)
 			}
 		}()
-		_, _ = state.terminal.Write([]byte("uinput output active. Focus the target application to type."))
+		if !vtOverlay {
+			_, _ = state.terminal.Write([]byte("uinput output active. Focus the target application to type."))
+		}
 	} else {
 		ptmx, err := startShell(config.Shell.Command, config.Shell.Args, cols, paneRows)
 		if err != nil {
@@ -1422,42 +1511,46 @@ func main() {
 		}()
 	}
 
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		panic(err)
-	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
-	if config.Mouse.SGR {
-		fmt.Print("\033[?1000h\033[?1006h")
-		if config.Mouse.HoverHighlight {
-			fmt.Print("\033[?1003h")
+	var input <-chan []byte
+	if !vtOverlay {
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			panic(err)
 		}
-		defer fmt.Print("\033[?1003l\033[?1006l\033[?1000l")
-	}
-	fmt.Print("\033[2J")
-	defer fmt.Print("\033[?25h\033[0m")
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+		if config.Mouse.SGR {
+			fmt.Print("\033[?1000h\033[?1006h")
+			if config.Mouse.HoverHighlight {
+				fmt.Print("\033[?1003h")
+			}
+			defer fmt.Print("\033[?1003l\033[?1006l\033[?1000l")
+		}
+		fmt.Print("\033[2J")
+		defer fmt.Print("\033[?25h\033[0m")
 
-	input := make(chan []byte)
-	go func() {
-		buf := make([]byte, 128)
-		decoder := inputDecoder{}
-		for {
-			n, err := os.Stdin.Read(buf)
-			if n > 0 {
-				for _, event := range decoder.feed(buf[:n]) {
-					input <- event
+		inputChannel := make(chan []byte)
+		input = inputChannel
+		go func() {
+			buf := make([]byte, 128)
+			decoder := inputDecoder{}
+			for {
+				n, err := os.Stdin.Read(buf)
+				if n > 0 {
+					for _, event := range decoder.feed(buf[:n]) {
+						inputChannel <- event
+					}
+				}
+				if err != nil {
+					for _, event := range decoder.flush() {
+						inputChannel <- event
+					}
+					return
 				}
 			}
-			if err != nil {
-				for _, event := range decoder.flush() {
-					input <- event
-				}
-				return
-			}
-		}
-	}()
+		}()
+	}
 	var mouseEvents chan gpmEvent
-	if config.Mouse.GPM {
+	if config.Mouse.GPM && !vtOverlay {
 		mouseEvents = make(chan gpmEvent, 16)
 		gpmConn, err := openGPM(config.Mouse.HoverHighlight)
 		if err != nil {
@@ -1473,12 +1566,31 @@ func main() {
 	controllerEvents := make(chan gamepadEvent, 32)
 	go watchGamepads(controllerEvents)
 
-	resized := make(chan os.Signal, 1)
-	signal.Notify(resized, syscall.SIGWINCH)
-	defer signal.Stop(resized)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(signals)
+	var resizeTicker *time.Ticker
+	var resizeTick <-chan time.Time
+	if vtOverlay {
+		defer func() {
+			if err := state.restoreVTOverlay(); err != nil {
+				fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+			}
+		}()
+		time.Sleep(200 * time.Millisecond)
+		if err := state.drawVTOverlay(); err != nil {
+			fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+			return
+		}
+		resizeTicker = time.NewTicker(time.Second)
+		resizeTick = resizeTicker.C
+		defer resizeTicker.Stop()
+	}
 
 	for {
-		state.draw()
+		if !vtOverlay {
+			state.draw()
+		}
 		select {
 		case buf := <-input:
 			if len(buf) == 1 && buf[0] == 27 {
@@ -1503,6 +1615,9 @@ func main() {
 				fmt.Fprintf(os.Stderr, "ttyosk: controller: %v\n", event.err)
 				continue
 			}
+			if vtOverlay && event.exit {
+				return
+			}
 			if event.dx != 0 || event.dy != 0 {
 				state.move(event.dx, event.dy)
 			}
@@ -1513,14 +1628,46 @@ func main() {
 				state.emitToShell("\x7f")
 			}
 			state.reportError()
-		case <-resized:
+			if vtOverlay {
+				if err := state.drawVTOverlay(); err != nil {
+					fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+					return
+				}
+			}
+		case receivedSignal := <-signals:
+			if receivedSignal != syscall.SIGWINCH {
+				return
+			}
 			cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
 			if err == nil && cols > 0 && rows > 0 {
-				paneRows := rows / 2
-				if paneRows < 1 {
-					paneRows = 1
+				if vtOverlay {
+					if cols != state.terminalCols || rows != state.vtRows {
+						if err := state.restoreVTOverlay(); err != nil {
+							fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+						}
+						if err := state.drawVTOverlay(); err != nil {
+							fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+							return
+						}
+					}
+				} else {
+					paneRows := rows / 2
+					if paneRows < 1 {
+						paneRows = 1
+					}
+					state.resizeTerminal(cols, paneRows)
 				}
-				state.resizeTerminal(cols, paneRows)
+			}
+		case <-resizeTick:
+			cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
+			if err == nil && cols > 0 && rows > 0 && (cols != state.terminalCols || rows != state.vtRows) {
+				if err := state.restoreVTOverlay(); err != nil {
+					fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+				}
+				if err := state.drawVTOverlay(); err != nil {
+					fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+					return
+				}
 			}
 		case <-outputChanged:
 		}
