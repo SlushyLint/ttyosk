@@ -1432,7 +1432,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
 		os.Exit(2)
 	}
-	if config.VTMode && !config.VTChild {
+	if config.VTMode && !config.VTService {
 		if !term.IsTerminal(int(os.Stdout.Fd())) {
 			fmt.Fprintln(os.Stderr, "ttyosk: -vt=true requires a terminal")
 			os.Exit(2)
@@ -1445,11 +1445,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ttyosk: VT keyboard running in background (pid %d); press controller Start to stop it\n", pid)
 		return
 	}
-	if config.VTChild && !config.VTMode {
-		fmt.Fprintln(os.Stderr, "ttyosk: internal VT child requires -vt=true")
+	if config.VTService && !config.VTMode {
+		fmt.Fprintln(os.Stderr, "ttyosk: -vt-service=true requires -vt=true")
 		os.Exit(2)
 	}
-	vtOverlay := config.VTMode && config.VTChild
+	vtOverlay := config.VTMode && config.VTService
 	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || cols <= 0 {
 		cols = 80
@@ -1566,6 +1566,22 @@ func main() {
 	controllerEvents := make(chan gamepadEvent, 32)
 	go watchGamepads(controllerEvents)
 
+	var physicalKeys <-chan physicalKeyEvent
+	if vtOverlay {
+		keyEvents := make(chan physicalKeyEvent, 64)
+		capture, err := startPhysicalKeyboardCapture(keyEvents)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ttyosk: capture physical keyboard: %v\n", err)
+			return
+		}
+		defer func() {
+			if err := capture.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "ttyosk: release physical keyboard: %v\n", err)
+			}
+		}()
+		physicalKeys = keyEvents
+	}
+
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
@@ -1626,6 +1642,17 @@ func main() {
 			}
 			if event.backspace {
 				state.emitToShell("\x7f")
+			}
+			state.reportError()
+			if vtOverlay {
+				if err := state.drawVTOverlay(); err != nil {
+					fmt.Fprintf(os.Stderr, "ttyosk: %v\n", err)
+					return
+				}
+			}
+		case event := <-physicalKeys:
+			if state.handlePhysicalKey(event) {
+				return
 			}
 			state.reportError()
 			if vtOverlay {

@@ -21,7 +21,7 @@ type appConfig struct {
 	Clipboard clipboardConfig `json:"clipboard"`
 	VTMode    bool            `json:"-"`
 	VTModeSet bool            `json:"-"`
-	VTChild   bool            `json:"-"`
+	VTService bool            `json:"-"`
 }
 
 type shellConfig struct {
@@ -107,7 +107,7 @@ func loadConfig(args []string) (appConfig, error) {
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "", "path to JSON configuration file")
 	vtMode := flags.Bool("vt", false, "type into the current terminal session")
-	vtChild := flags.Bool("vt-child", false, "")
+	vtService := flags.Bool("vt-service", false, "run VT overlay in foreground for a service manager")
 	if err := flags.Parse(args); err != nil {
 		return appConfig{}, err
 	}
@@ -117,7 +117,7 @@ func loadConfig(args []string) (appConfig, error) {
 
 	config := defaultConfig()
 	config.VTMode = *vtMode
-	config.VTChild = *vtChild
+	config.VTService = *vtService
 	flags.Visit(func(flag *flag.Flag) {
 		if flag.Name == "vt" {
 			config.VTModeSet = true
@@ -141,6 +141,9 @@ func loadConfig(args []string) (appConfig, error) {
 
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) && *configPath == "" {
+		if err := config.validate(); err != nil {
+			return appConfig{}, fmt.Errorf("invalid config %q: %w", path, err)
+		}
 		return config, nil
 	}
 	if err != nil {
@@ -173,6 +176,9 @@ func loadConfig(args []string) (appConfig, error) {
 }
 
 func (c appConfig) validate() error {
+	if c.VTService && !c.VTMode {
+		return errors.New("vt-service requires -vt=true")
+	}
 	if c.Keyboard.Output != "uinput" && strings.TrimSpace(c.Shell.Command) == "" {
 		return errors.New("shell.command must not be empty")
 	}

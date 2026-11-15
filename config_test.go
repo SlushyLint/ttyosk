@@ -123,6 +123,20 @@ func TestVTFlagOverridesConfiguredOutput(t *testing.T) {
 	}
 }
 
+func TestVTServiceRequiresVTMode(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if _, err := loadConfig([]string{"-vt-service=true"}); err == nil {
+		t.Fatal("expected VT service mode without VT mode to be rejected")
+	}
+	config, err := loadConfig([]string{"-vt=true", "-vt-service=true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.VTService || !config.VTMode {
+		t.Fatalf("expected foreground VT service mode, got %+v", config)
+	}
+}
+
 func TestLoadConfigRequiresExplicitFileToExist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.json")
 	if _, err := loadConfig([]string{"--config", path}); err == nil {

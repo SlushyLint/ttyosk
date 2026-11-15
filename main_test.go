@@ -264,6 +264,34 @@ func TestVTOverlayFramePreservesShellAndReservesKeyboardRows(t *testing.T) {
 	}
 }
 
+func TestPhysicalKeyboardControlsOverlayAndDropsOtherKeys(t *testing.T) {
+	state := keyboardState{config: defaultConfig(), x: 1, y: 1}
+	keyboard := &testKeyboardEmitter{}
+	state.config.Keyboard.Output = "uinput"
+	state.uinput = keyboard
+
+	state.handlePhysicalKey(physicalKeyEvent{code: physicalKeyJ, value: 1})
+	if state.y != 2 || state.x != 1 {
+		t.Fatalf("expected physical j to move selection down, got %d,%d", state.x, state.y)
+	}
+	state.handlePhysicalKey(physicalKeyEvent{code: physicalKeyH, value: 1})
+	if state.y != 2 || state.x != 0 {
+		t.Fatalf("expected physical h to move selection left, got %d,%d", state.x, state.y)
+	}
+	state.handlePhysicalKey(physicalKeyEvent{code: 30, value: 1})
+	if len(keyboard.keys) != 0 || state.x != 0 || state.y != 2 {
+		t.Fatal("expected other physical keys to be consumed without typing or moving")
+	}
+	state.x = 1
+	state.handlePhysicalKey(physicalKeyEvent{code: physicalKeySpace, value: 1})
+	if len(keyboard.keys) != 1 || keyboard.keys[0] != "a" {
+		t.Fatalf("expected Space to activate the selected virtual key, got %v", keyboard.keys)
+	}
+	if !state.handlePhysicalKey(physicalKeyEvent{code: physicalKeyEsc, value: 1}) {
+		t.Fatal("expected Escape to exit the overlay")
+	}
+}
+
 func TestStickyShiftRemainsActiveUntilToggledOff(t *testing.T) {
 	state, shell := newTestKeyboardState()
 	state.config = defaultConfig()

@@ -86,11 +86,23 @@ settings and invalid values are reported as errors. JSON files do not support
 comments.
 
 - `ttyosk -vt=true` attaches the controller keyboard to the current terminal
-  session. ttyosk starts its keyboard UI in the background, reserves the
+  session. ttyosk runs its keyboard UI in the background, reserves the
   terminal's bottom rows for the interface, and sends key events to the
-  foreground shell. This overrides `keyboard.output`. `/dev/uinput` must be
-  writable by your user. Press the controller's Start button to stop the
-  overlay.
+  foreground process on that tty (including a getty login prompt). It grabs
+  physical keyboards and does not pass their other keys through. Physical
+  `h/j/k/l` and arrow keys move the selection; Space or Enter activates a
+  virtual key; Escape exits. This overrides `keyboard.output`. ttyosk needs
+  access to `/dev/input/event*` and `/dev/uinput`. Press the controller's
+  Start button to stop the overlay.
+- For a boot-time service, run `ttyosk -vt=true -vt-service=true` in the
+  foreground, with the service's output attached to the target tty. For
+  systemd, set `ExecStart=/usr/local/bin/ttyosk -vt=true -vt-service=true`,
+  `StandardInput=null`, `StandardOutput=tty`, and `TTYPath=/dev/tty2`. Run
+  the service as a user allowed to write to `/dev/tty2` and `/dev/uinput` and
+  read/grab `/dev/input/event*`.
+  Keep the getty enabled on that tty; getty provides the login prompt and
+  shell, while ttyosk draws the keyboard and supplies input. The target VT
+  must be active for injected keys to reach it.
 - `ttyosk -vt=false` starts ttyosk's own shell in a PTY, as in the original
   mode, even if `keyboard.output` is set to `uinput`. Boolean values can also
   be abbreviated as `-vt=t` and `-vt=f`. Without `-vt`, the configured
@@ -100,15 +112,11 @@ comments.
   `uinput` (Linux only; keys are emitted as system keyboard events to the
   currently focused application). In `uinput` mode, ttyosk does not start its
   configured shell. Give the user access to `/dev/uinput` (often via the
-  `input` group or a udev rule). Keep ttyosk visible in its own terminal and
-  focus the application you want to type into; if ttyosk itself has focus,
-  injected keys may be read by ttyosk instead. The virtual keyboard emits
-  ordinary key events, so set `keyboard.layout` to match the system's active
-  layout; that layout determines the resulting characters. Caps Lock and Num
-  Lock change the system state. Non-ASCII clipboard text is not supported in
-  this mode. On Linux virtual consoles, run ttyosk on a separate VT and switch
-  to the target VT; the controller remains available while ttyosk's UI stays
-  on its original VT.
+  `input` group or a udev rule). `-vt=true` selects the currently focused
+  terminal directly. The virtual keyboard emits ordinary key events, so set
+  `keyboard.layout` to match the system's active layout; that layout determines
+  the resulting characters. Caps Lock and Num Lock change the system state.
+  Non-ASCII clipboard text is not supported in this mode.
 - `keyboard.layout` can be `qwerty`, `dvorak`, `colemak`, or `custom`.
   `custom_layout` is an array of key rows when using `custom`; entries are the
   key labels/values supported by the virtual keyboard (one character or a
@@ -136,7 +144,7 @@ comments.
 ## Keyboard Controls
 
 - Move the mouse over a displayed key to highlight it, then click to type it. Terminal-emulator mouse support requires SGR mouse reporting; on the Linux virtual console, GPM can provide it instead.
-- Use the physical arrow keys, or `h`, `j`, `k`, and `l`, to move the selection. Press Space or physical Enter to activate the selected virtual key.
+- Outside VT mode, use the physical arrow keys, or `h`, `j`, `k`, and `l`, to move the selection. In VT mode, those keys are captured directly from Linux input devices, move the selection, and are not sent to the tty; Space/Enter activate the selected key, Escape exits, and other physical keys are discarded.
 - The virtual Return key submits the current command to the shell.
 - Virtual Shift, Ctrl, and Meta apply to the next keypress; active one-shot modifiers are highlighted blue. Activate a modifier again before using it to turn it off. Ctrl and Meta can be combined or toggled off independently; Meta sends an Escape prefix before the key. The `caps` key toggles Caps Lock for letters and stays highlighted blue while enabled; Shift temporarily reverses Caps Lock for one character. Virtual Esc, Tab, and arrow keys send those keys to the shell.
 - Press physical Escape to exit `ttyosk`. The virtual Esc key sends Escape to the shell instead.

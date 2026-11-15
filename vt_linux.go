@@ -15,7 +15,7 @@ func startVTOverlay(args []string) (int, error) {
 		return 0, fmt.Errorf("find ttyosk executable: %w", err)
 	}
 	childArgs := append([]string(nil), args...)
-	childArgs = append(childArgs, "-vt-child=true")
+	childArgs = append(childArgs, "-vt-service=true")
 	command := exec.Command(executable, childArgs...)
 	command.Stdin = nil
 	command.Stdout = os.Stdout
