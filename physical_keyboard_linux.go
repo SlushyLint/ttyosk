@@ -101,7 +101,7 @@ func evdevHasKey(device *os.File, code int) (bool, error) {
 }
 
 func evdevReadRequest(number, size int) uintptr {
-	return uintptr(evdevIOCRead<<30 | evdevIOCType<<8 | number | size<<16)
+	return uintptr(uint32(evdevIOCRead)<<30 | uint32(evdevIOCType)<<8 | uint32(number) | uint32(size)<<16)
 }
 
 func evdevIoctl(fd int, request uintptr, data []byte) error {
