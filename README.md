@@ -89,7 +89,11 @@ comments.
   `custom_layout` is an array of key rows when using `custom`; entries are the
   key labels/values supported by the virtual keyboard (one character or a
   named key such as `SPACE`, `return`, `ctrl`, or `F1`).
-- `keyboard.extended` adds F1–F12, navigation keys, and a numeric keypad.
+- `keyboard.extended` adds grouped F1–F12 keys, navigation keys, and a numeric
+  keypad with Num above the number columns. The keypad’s right column places
+  `-` beside Num, then `*`, `/`, and `+` alongside the number rows.
+  `keyboard.num_lock` controls the keypad’s initial Num Lock state; the `Num`
+  key toggles between number and navigation behavior.
   `key_padding` adjusts key spacing. `sticky_modifiers` keeps Shift/Ctrl/Meta
   enabled until toggled off. `vim_navigation` toggles h/j/k/l navigation.
 - `keyboard.colors` sets ANSI colors from 0 to 255; `-1` uses the terminal

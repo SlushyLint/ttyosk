@@ -30,6 +30,7 @@ type keyboardConfig struct {
 	Layout          string     `json:"layout"`
 	CustomLayout    [][]string `json:"custom_layout"`
 	Extended        bool       `json:"extended"`
+	NumLock         bool       `json:"num_lock"`
 	StickyModifiers bool       `json:"sticky_modifiers"`
 	KeyPadding      int        `json:"key_padding"`
 	VimNavigation   bool       `json:"vim_navigation"`
@@ -64,6 +65,7 @@ func defaultConfig() appConfig {
 		Shell: shellConfig{Command: "zsh"},
 		Keyboard: keyboardConfig{
 			Layout:        "qwerty",
+			NumLock:       true,
 			KeyPadding:    1,
 			VimNavigation: true,
 			Colors: colorTheme{
@@ -195,6 +197,7 @@ func validCustomKey(key string) bool {
 	switch key {
 	case "esc", "del", "tab", "caps", "return", "rtrn", "shift", "ctrl", "meta", "SPACE",
 		"enter", "ins", "delete", "home", "end", "pgup", "pgdn", "paste",
+		"num", "kp0", "kp0wide", "kp1", "kp2", "kp3", "kp4", "kp5", "kp6", "kp7", "kp8", "kp9", "kp.",
 		"←", "→", "↑", "↓", "left", "right", "up", "down":
 		return true
 	}

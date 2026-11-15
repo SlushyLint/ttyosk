@@ -43,11 +43,11 @@ var colemakKey = [][]string{
 const keyboardSpacer = "\x00"
 
 var extendedKeyRows = [][]string{
-	{"ins", "home", "pgup", keyboardSpacer, keyboardSpacer, "/", "*", "-"},
-	{"delete", "end", "pgdn", keyboardSpacer, "7", "8", "9", "+"},
-	{keyboardSpacer, "↑", keyboardSpacer, keyboardSpacer, "4", "5", "6", "+"},
-	{"←", "↓", "→", keyboardSpacer, "1", "2", "3", "enter"},
-	{keyboardSpacer, keyboardSpacer, keyboardSpacer, keyboardSpacer, "0", ".", "enter"},
+	{"ins", "home", "pgup", keyboardSpacer, "numwide", keyboardSpacer, keyboardSpacer, "-"},
+	{"delete", "end", "pgdn", keyboardSpacer, "kp1", "kp2", "kp3", "*"},
+	{keyboardSpacer, "↑", keyboardSpacer, keyboardSpacer, "kp4", "kp5", "kp6", "/"},
+	{"←", "↓", "→", keyboardSpacer, "kp7", "kp8", "kp9", "+"},
+	{keyboardSpacer, keyboardSpacer, keyboardSpacer, keyboardSpacer, "kp0wide", keyboardSpacer, "kp.", "enter"},
 }
 
 type keyboardState struct {
@@ -57,6 +57,7 @@ type keyboardState struct {
 	meta         bool
 	shiftOnce    bool
 	capsLock     bool
+	numLock      bool
 	shell        io.Writer
 	ptmx         *os.File
 	terminal     vt10x.Terminal
@@ -82,6 +83,13 @@ type keyHitArea struct {
 	x     int
 	y     int
 	row   int
+}
+
+type renderedKeyCell struct {
+	keyName string
+	col     int
+	width   int
+	text    string
 }
 
 type gpmEvent struct {
@@ -115,14 +123,14 @@ func (s *keyboardState) move(dx, dy int) {
 		if cols <= 0 {
 			cols = 80
 		}
-		targetCenter := keyboardKeyCenterWithPadding(layout[s.y], currentX, cols, s.keyPadding())
+		targetCenter := s.keyboardKeyCenter(layout, s.y, currentX, cols)
 		bestDistance := int(^uint(0) >> 1)
 		bestIndexDistance := bestDistance
 		for candidate := range layout[newY] {
 			if !validKeyAt(layout[newY], candidate) {
 				continue
 			}
-			center := keyboardKeyCenterWithPadding(layout[newY], candidate, cols, s.keyPadding())
+			center := s.keyboardKeyCenter(layout, newY, candidate, cols)
 			distance := absInt(center - targetCenter)
 			indexDistance := absInt(candidate - currentX)
 			if distance < bestDistance || (distance == bestDistance && indexDistance < bestIndexDistance) {
@@ -151,6 +159,29 @@ func (s *keyboardState) move(dx, dy int) {
 
 	s.x = newX
 	s.y = newY
+}
+
+func (s *keyboardState) keyboardKeyCenter(layout [][]string, row, col, cols int) int {
+	if !s.config.Keyboard.Extended {
+		return keyboardKeyCenterWithPadding(layout[row], col, cols, s.keyPadding())
+	}
+	rendered := s.renderKeyboardRows(layout)
+	width := 0
+	for _, cell := range rendered[row] {
+		width += cell.width
+	}
+	startX := (cols - width) / 2
+	if startX < 1 {
+		startX = 1
+	}
+	offset := 0
+	for _, cell := range rendered[row] {
+		if cell.col == col {
+			return startX*2 + offset*2 + cell.width
+		}
+		offset += cell.width
+	}
+	return startX*2 + offset*2
 }
 
 func keyboardKeyCenter(row []string, index, cols int) int {
@@ -212,15 +243,7 @@ func absInt(value int) int {
 }
 
 func (s *keyboardState) activeLayout() [][]string {
-	rows := key
-	switch s.config.Keyboard.Layout {
-	case "dvorak":
-		rows = dvorakKey
-	case "colemak":
-		rows = colemakKey
-	case "custom":
-		rows = s.config.Keyboard.CustomLayout
-	}
+	rows := s.baseLayout()
 	layout := make([][]string, len(rows))
 	if s.config.Keyboard.Extended {
 		layout = make([][]string, len(rows)+1)
@@ -262,6 +285,19 @@ func (s *keyboardState) activeLayout() [][]string {
 	return layout
 }
 
+func (s *keyboardState) baseLayout() [][]string {
+	rows := key
+	switch s.config.Keyboard.Layout {
+	case "dvorak":
+		rows = dvorakKey
+	case "colemak":
+		rows = colemakKey
+	case "custom":
+		rows = s.config.Keyboard.CustomLayout
+	}
+	return rows
+}
+
 func (s *keyboardState) currentKey() string {
 	layout := s.activeLayout()
 	if s.y < 0 || s.y >= len(layout) {
@@ -285,6 +321,30 @@ func (s *keyboardState) keyPadding() int {
 		return 1
 	}
 	return padding
+}
+
+func (s *keyboardState) numLockEnabled() bool {
+	return s.config.Keyboard.Layout == "" || s.numLock
+}
+
+func (s *keyboardState) displayKeyName(keyName string) string {
+	if keyName == "num" || keyName == "numwide" {
+		return "Num"
+	}
+	keypad := map[string][2]string{
+		"kp7": {"7", "Home"}, "kp8": {"8", "↑"}, "kp9": {"9", "PgUp"},
+		"kp4": {"4", "←"}, "kp5": {"5", "5"}, "kp6": {"6", "→"},
+		"kp1": {"1", "End"}, "kp2": {"2", "↓"}, "kp3": {"3", "PgDn"},
+		"kp0": {"0", "Ins"}, "kp0wide": {"0", "Ins"}, "kp.": {".", "Del"},
+	}
+	if names, ok := keypad[keyName]; ok {
+		index := 1
+		if s.numLockEnabled() {
+			index = 0
+		}
+		return names[index]
+	}
+	return keyName
 }
 
 func (s *keyboardState) vimNavigationEnabled() bool {
@@ -416,7 +476,11 @@ func shiftValue(value string) string {
 }
 
 func (s *keyboardState) insertSelectedKey() {
-	selected := s.currentKey()
+	selected := extendedKeyIdentity(s.currentKey())
+	if selected == "num" {
+		s.numLock = !s.numLock
+		return
+	}
 	if selected == "shift" {
 		s.shiftOnce = !s.shiftOnce
 		return
@@ -458,6 +522,30 @@ func (s *keyboardState) insertSelectedKey() {
 	case "paste":
 		s.pasteClipboard()
 		return
+	case "kp7":
+		value = s.keypadValue("7", "home")
+	case "kp8":
+		value = s.keypadValue("8", "up")
+	case "kp9":
+		value = s.keypadValue("9", "pgup")
+	case "kp4":
+		value = s.keypadValue("4", "left")
+	case "kp5":
+		value = "5"
+	case "kp6":
+		value = s.keypadValue("6", "right")
+	case "kp1":
+		value = s.keypadValue("1", "end")
+	case "kp2":
+		value = s.keypadValue("2", "down")
+	case "kp3":
+		value = s.keypadValue("3", "pgdn")
+	case "kp0":
+		value = s.keypadValue("0", "ins")
+	case "kp0wide":
+		value = s.keypadValue("0", "ins")
+	case "kp.":
+		value = s.keypadValue(".", "delete")
 	case "ins":
 		value = "\x1b[2~"
 	case "delete":
@@ -484,6 +572,35 @@ func (s *keyboardState) insertSelectedKey() {
 		value = "\x1b" + value
 	}
 	s.emitToShell(value)
+}
+
+func (s *keyboardState) keypadValue(number, navigation string) string {
+	if s.numLockEnabled() {
+		return number
+	}
+	switch navigation {
+	case "home":
+		return "\x1b[H"
+	case "up":
+		return s.arrowSequence("↑", s.ctrl, s.meta)
+	case "pgup":
+		return "\x1b[5~"
+	case "left":
+		return s.arrowSequence("←", s.ctrl, s.meta)
+	case "right":
+		return s.arrowSequence("→", s.ctrl, s.meta)
+	case "end":
+		return "\x1b[F"
+	case "down":
+		return s.arrowSequence("↓", s.ctrl, s.meta)
+	case "pgdn":
+		return "\x1b[6~"
+	case "ins":
+		return "\x1b[2~"
+	case "delete":
+		return "\x1b[3~"
+	}
+	return number
 }
 
 func functionKeySequence(value string) string {
@@ -676,6 +793,223 @@ func (s *keyboardState) forwardMouseEvent(input []byte) {
 	}
 }
 
+func (s *keyboardState) renderKeyboardRows(layout [][]string) [][]renderedKeyCell {
+	if !s.config.Keyboard.Extended {
+		rendered := make([][]renderedKeyCell, len(layout))
+		for rowIndex, row := range layout {
+			for col, keyName := range row {
+				width := utf8.RuneCountInString(keyName) + s.keyPadding()*2
+				text := strings.Repeat(" ", s.keyPadding()) + keyName + strings.Repeat(" ", s.keyPadding())
+				if keyName == keyboardSpacer {
+					width = s.keyPadding()*2 + 1
+					text = strings.Repeat(" ", width)
+				}
+				rendered[rowIndex] = append(rendered[rowIndex], renderedKeyCell{
+					keyName: keyName,
+					col:     col,
+					width:   width,
+					text:    text,
+				})
+			}
+		}
+		return rendered
+	}
+
+	baseRows := s.baseLayout()
+	sideRows := make([][]string, len(baseRows))
+	sideStarts := make([]int, len(baseRows))
+	mainWidths := make([]int, len(baseRows))
+	maxMainWidth := 0
+	sideColumnWidths := make([]int, 0)
+	for rowIndex, baseRow := range baseRows {
+		layoutRow := layout[rowIndex+1]
+		for _, keyName := range layoutRow[:len(baseRow)] {
+			mainWidths[rowIndex] += s.renderKeyWidth(keyName)
+		}
+		if mainWidths[rowIndex] > maxMainWidth {
+			maxMainWidth = mainWidths[rowIndex]
+		}
+		sideStart := len(baseRow)
+		if rowIndex < len(extendedKeyRows) {
+			sideStart++
+		}
+		sideStarts[rowIndex] = sideStart
+		if sideStart < len(layoutRow) {
+			sideRows[rowIndex] = layoutRow[sideStart:]
+		}
+		for col, keyName := range sideRows[rowIndex] {
+			span := 1
+			if keyName == "numwide" {
+				span = 3
+			} else if keyName == "kp0wide" {
+				span = 2
+			}
+			for offset := 0; offset < span; offset++ {
+				for len(sideColumnWidths) <= col+offset {
+					sideColumnWidths = append(sideColumnWidths, 0)
+				}
+			}
+			if keyName == "numwide" {
+				continue
+			}
+			width := s.renderKeyWidth(keyName)
+			if width > sideColumnWidths[col] {
+				sideColumnWidths[col] = width
+			}
+		}
+	}
+	if len(sideColumnWidths) >= 7 {
+		numberColumnWidth := maxInt(sideColumnWidths[4], maxInt(sideColumnWidths[5], sideColumnWidths[6]))
+		for col := 4; col <= 6; col++ {
+			sideColumnWidths[col] = numberColumnWidth
+		}
+	}
+	sideWidth := 0
+	for _, width := range sideColumnWidths {
+		sideWidth += width
+	}
+	const sectionGap = 3
+	sectionWidth := maxMainWidth + sectionGap + sideWidth
+	totalWidth := sectionWidth
+
+	rendered := make([][]renderedKeyCell, len(layout))
+	functionRowWidth := 0
+	for col, keyName := range layout[0] {
+		functionRowWidth += functionKeyWidth(keyName)
+		if col == 3 || col == 7 {
+			functionRowWidth++
+		}
+	}
+	if functionRowWidth > totalWidth {
+		totalWidth = functionRowWidth
+	}
+	functionPadding := (maxMainWidth - functionRowWidth) / 2
+	if functionPadding < 0 {
+		functionPadding = 0
+	}
+	rendered[0] = append(rendered[0], renderedKeyCell{col: -1, width: functionPadding, text: strings.Repeat(" ", functionPadding)})
+	for col, keyName := range layout[0] {
+		if col == 4 || col == 8 {
+			rendered[0] = append(rendered[0], renderedKeyCell{col: -1, width: 1, text: " "})
+		}
+		width := functionKeyWidth(keyName)
+		rendered[0] = append(rendered[0], renderedKeyCell{
+			keyName: keyName,
+			col:     col,
+			width:   width,
+			text:    functionKeyText(keyName, width),
+		})
+	}
+	rendered[0] = append(rendered[0], renderedKeyCell{
+		col:   -1,
+		width: totalWidth - functionPadding - functionRowWidth,
+		text:  strings.Repeat(" ", totalWidth-functionPadding-functionRowWidth),
+	})
+
+	for rowIndex, baseRow := range baseRows {
+		layoutIndex := rowIndex + 1
+		leftPadding := (maxMainWidth - mainWidths[rowIndex]) / 2
+		if leftPadding > 0 {
+			rendered[layoutIndex] = append(rendered[layoutIndex], renderedKeyCell{
+				col: -1, width: leftPadding, text: strings.Repeat(" ", leftPadding),
+			})
+		}
+		for col, keyName := range layout[rowIndex+1][:len(baseRow)] {
+			width := s.renderKeyWidth(keyName)
+			rendered[layoutIndex] = append(rendered[layoutIndex], renderedKeyCell{
+				keyName: keyName,
+				col:     col,
+				width:   width,
+				text:    s.renderKeyText(keyName, width),
+			})
+		}
+		rightPadding := maxMainWidth - mainWidths[rowIndex] - leftPadding
+		if rightPadding > 0 {
+			rendered[layoutIndex] = append(rendered[layoutIndex], renderedKeyCell{
+				col: -1, width: rightPadding, text: strings.Repeat(" ", rightPadding),
+			})
+		}
+		rendered[layoutIndex] = append(rendered[layoutIndex], renderedKeyCell{
+			col: -1, width: sectionGap, text: strings.Repeat(" ", sectionGap),
+		})
+		for col := 0; col < len(sideRows[rowIndex]); col++ {
+			keyName := sideRows[rowIndex][col]
+			logicalCol := col
+			width := sideColumnWidths[col]
+			switch keyName {
+			case "kp0wide":
+				width += sideColumnWidths[col+1]
+				col++
+			case "numwide":
+				width += sideColumnWidths[col+1] + sideColumnWidths[col+2]
+				col += 2
+			}
+			text := s.renderKeyText(keyName, width)
+			rendered[layoutIndex] = append(rendered[layoutIndex], renderedKeyCell{
+				keyName: keyName,
+				col:     sideStarts[rowIndex] + logicalCol,
+				width:   width,
+				text:    text,
+			})
+		}
+		for col := len(sideRows[rowIndex]); col < len(sideColumnWidths); col++ {
+			width := sideColumnWidths[col]
+			rendered[layoutIndex] = append(rendered[layoutIndex], renderedKeyCell{
+				col: -1, width: width, text: strings.Repeat(" ", width),
+			})
+		}
+		if extra := totalWidth - sectionWidth; extra > 0 {
+			rendered[layoutIndex] = append(rendered[layoutIndex], renderedKeyCell{
+				col: -1, width: extra, text: strings.Repeat(" ", extra),
+			})
+		}
+	}
+	return rendered
+}
+
+func maxInt(first, second int) int {
+	if first > second {
+		return first
+	}
+	return second
+}
+
+func (s *keyboardState) renderKeyWidth(keyName string) int {
+	padding := s.keyPadding()
+	if keyName == keyboardSpacer {
+		return padding*2 + 1
+	}
+	return utf8.RuneCountInString(s.displayKeyName(keyName)) + padding*2
+}
+
+func (s *keyboardState) renderKeyText(keyName string, width int) string {
+	padding := s.keyPadding()
+	if keyName == keyboardSpacer {
+		return strings.Repeat(" ", width)
+	}
+	displayName := s.displayKeyName(keyName)
+	content := strings.Repeat(" ", padding) + displayName + strings.Repeat(" ", padding)
+	contentWidth := utf8.RuneCountInString(content)
+	leftPadding := (width - contentWidth) / 2
+	return strings.Repeat(" ", leftPadding) + content + strings.Repeat(" ", width-contentWidth-leftPadding)
+}
+
+func functionKeyWidth(string) int {
+	return 4
+}
+
+func functionKeyText(keyName string, width int) string {
+	leftPadding := (width - utf8.RuneCountInString(keyName)) / 2
+	return strings.Repeat(" ", leftPadding) + keyName + strings.Repeat(" ", width-leftPadding-utf8.RuneCountInString(keyName))
+}
+
+func extendedKeyIdentity(keyName string) string {
+	if keyName == "numwide" {
+		return "num"
+	}
+	return keyName
+}
+
 func (s *keyboardState) draw() {
 	layout := s.activeLayout()
 	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
@@ -701,45 +1035,45 @@ func (s *keyboardState) draw() {
 
 	s.keyAreas = nil
 	theme := s.keyTheme()
-	for rowIndex, row := range layout {
+	renderedRows := s.renderKeyboardRows(layout)
+	for rowIndex, row := range renderedRows {
 		var line strings.Builder
-		cells := make([]string, len(row))
 		lineWidth := 0
-		for col, keyName := range row {
-			if keyName == keyboardSpacer {
-				cells[col] = strings.Repeat(" ", s.keyPadding()*2+1)
-				lineWidth += utf8.RuneCountInString(cells[col])
+		for _, cell := range row {
+			if cell.col < 0 || cell.keyName == keyboardSpacer || cell.keyName == "" {
+				line.WriteString(cell.text)
+				lineWidth += cell.width
 				continue
 			}
-			padding := strings.Repeat(" ", s.keyPadding())
-			cells[col] = padding + keyName + padding
-			selected := rowIndex == s.y && col == s.x
+			selected := rowIndex == s.y && cell.col == s.x
+			keyName := cell.keyName
 			activeModifier := keyName == "ctrl" && s.ctrl ||
 				keyName == "meta" && s.meta ||
 				keyName == "shift" && s.shiftOnce ||
-				keyName == "caps" && s.capsLock
-			writeKeyboardCellWithTheme(&line, cells[col], selected, activeModifier, theme)
-			lineWidth += utf8.RuneCountInString(cells[col])
+				keyName == "caps" && s.capsLock ||
+				(keyName == "num" || keyName == "numwide") && s.numLockEnabled()
+			writeKeyboardCellWithTheme(&line, cell.text, selected, activeModifier, theme)
+			lineWidth += cell.width
 		}
 		startX := (cols - lineWidth) / 2
 		if startX < 1 {
 			startX = 1
 		}
-		cellX := startX
 		keyboardY := keyboardStartY + rowIndex
 		frame.WriteString(fmt.Sprintf("\033[%d;1H\033[2K", keyboardY))
 		frame.WriteString(fmt.Sprintf("\033[%d;%dH", keyboardY, startX))
-		for col, cell := range cells {
-			if row[col] != keyboardSpacer {
+		cellX := startX
+		for _, cell := range row {
+			if cell.col >= 0 && cell.keyName != keyboardSpacer && cell.keyName != "" {
 				s.keyAreas = append(s.keyAreas, keyHitArea{
 					left:  cellX,
-					right: cellX + utf8.RuneCountInString(cell) - 1,
-					x:     col,
+					right: cellX + cell.width - 1,
+					x:     cell.col,
 					y:     keyboardStartY + rowIndex,
 					row:   rowIndex,
 				})
 			}
-			cellX += utf8.RuneCountInString(cell)
+			cellX += cell.width
 		}
 		frame.WriteString(line.String())
 	}
@@ -927,7 +1261,11 @@ func main() {
 	if paneRows < 1 {
 		paneRows = 1
 	}
-	state := keyboardState{terminal: vt10x.New(vt10x.WithSize(cols, paneRows)), config: config}
+	state := keyboardState{
+		terminal: vt10x.New(vt10x.WithSize(cols, paneRows)),
+		config:   config,
+		numLock:  config.Keyboard.NumLock,
+	}
 
 	outputChanged := make(chan struct{}, 1)
 	ptmx, err := startShell(config.Shell.Command, config.Shell.Args, cols, paneRows)

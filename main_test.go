@@ -182,6 +182,7 @@ func TestExtendedLayoutIncludesNavigationAndFunctionKeys(t *testing.T) {
 	state, shell := newTestKeyboardState()
 	state.config = defaultConfig()
 	state.config.Keyboard.Extended = true
+	state.numLock = true
 	layout := state.activeLayout()
 	if len(layout) != len(key)+1 || layout[0][0] != "F1" {
 		t.Fatalf("expected extended layout to include a function-key row, got %v", layout)
@@ -189,6 +190,163 @@ func TestExtendedLayoutIncludesNavigationAndFunctionKeys(t *testing.T) {
 	state.x, state.y = 17, 1
 	state.insertSelectedKey()
 	assertShellInput(t, shell, "\x1b[H")
+}
+
+func TestExtendedLayoutKeepsRightSectionAligned(t *testing.T) {
+	state := keyboardState{config: defaultConfig()}
+	state.config.Keyboard.Extended = true
+	layout := state.activeLayout()
+	rows := state.renderKeyboardRows(layout)
+
+	width := 0
+	for _, cell := range rows[0] {
+		width += cell.width
+	}
+	for rowIndex, row := range rows[1:] {
+		rowWidth := 0
+		for _, cell := range row {
+			rowWidth += cell.width
+		}
+		if rowWidth != width {
+			t.Fatalf("expected extended rows to have uniform width %d; row %d has %d", width, rowIndex+1, rowWidth)
+		}
+	}
+
+	position := func(row []renderedKeyCell, keyName string) int {
+		offset := 0
+		for _, cell := range row {
+			if cell.keyName == keyName {
+				return offset
+			}
+			offset += cell.width
+		}
+		return -1
+	}
+	if got, want := position(rows[1], "home"), position(rows[2], "end"); got != want {
+		t.Fatalf("expected navigation column to align at %d, got %d", want, got)
+	}
+	if got, want := position(rows[2], "kp1"), position(rows[3], "kp4"); got != want {
+		t.Fatalf("expected numpad column to align at %d, got %d", want, got)
+	}
+	for _, pair := range [][2]string{{"kp7", "kp8"}, {"kp4", "kp5"}, {"kp1", "kp2"}} {
+		first, second := findRenderedKey(rows, pair[0]), findRenderedKey(rows, pair[1])
+		if first.width != second.width {
+			t.Fatalf("expected keypad columns %q and %q to have equal widths, got %+v and %+v", pair[0], pair[1], first, second)
+		}
+	}
+	num := findRenderedKey(rows[1:2], "numwide")
+	if got, want := num.width, findRenderedKey(rows[2:3], "kp1").width+findRenderedKey(rows[2:3], "kp2").width+findRenderedKey(rows[2:3], "kp3").width; got != want {
+		t.Fatalf("expected Num key to span the number columns (%d), got %d", want, got)
+	}
+	if lastRenderedPosition(rows[1], "-") <= position(rows[1], "numwide") {
+		t.Fatal("expected - to appear to the right of the Num key")
+	}
+	for _, row := range []struct {
+		row      int
+		numbers  [3]string
+		operator string
+	}{
+		{row: 2, numbers: [3]string{"kp1", "kp2", "kp3"}, operator: "*"},
+		{row: 3, numbers: [3]string{"kp4", "kp5", "kp6"}, operator: "/"},
+		{row: 4, numbers: [3]string{"kp7", "kp8", "kp9"}, operator: "+"},
+	} {
+		if position(rows[row.row], row.operator) <= position(rows[row.row], row.numbers[2]) {
+			t.Fatalf("expected operator %q to follow %v on keypad row %d", row.operator, row.numbers, row.row)
+		}
+		for _, number := range row.numbers {
+			if position(rows[row.row], number) < 0 {
+				t.Fatalf("expected %q in keypad row %d", number, row.row)
+			}
+		}
+	}
+	if position(rows[0], "F5") != position(rows[0], "F4")+findRenderedKey(rows[:1], "F4").width+1 ||
+		position(rows[0], "F9") != position(rows[0], "F8")+findRenderedKey(rows[:1], "F8").width+1 {
+		t.Fatal("expected function keys to have visual gaps between groups of four")
+	}
+	if countKey(layout, "+") != 1 || countKey(layout, "enter") != 1 {
+		t.Fatal("expected exactly one plus key and one Enter key")
+	}
+}
+
+func countKey(layout [][]string, keyName string) int {
+	count := 0
+	for _, row := range layout {
+		for _, name := range row {
+			if name == keyName {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func findRenderedKey(rows [][]renderedKeyCell, keyName string) renderedKeyCell {
+	for _, row := range rows {
+		for _, cell := range row {
+			if cell.keyName == keyName {
+				return cell
+			}
+		}
+	}
+	return renderedKeyCell{}
+}
+
+func lastRenderedPosition(row []renderedKeyCell, keyName string) int {
+	offset, found := 0, -1
+	for _, cell := range row {
+		if cell.keyName == keyName {
+			found = offset
+		}
+		offset += cell.width
+	}
+	return found
+}
+
+func TestExtendedKeypadNumLockDisplayAndOutput(t *testing.T) {
+	state, shell := newTestKeyboardState()
+	state.config = defaultConfig()
+	state.config.Keyboard.Extended = true
+	state.numLock = true
+	layout := state.activeLayout()
+	keyIndex := func(row int, keyName string) int {
+		for col, name := range layout[row] {
+			if name == keyName {
+				return col
+			}
+		}
+		t.Fatalf("key %q not found in row %d", keyName, row)
+		return -1
+	}
+
+	if got := state.displayKeyName("kp7"); got != "7" {
+		t.Fatalf("expected Num Lock keypad label 7, got %q", got)
+	}
+	state.x, state.y = keyIndex(4, "kp7"), 4
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "7")
+
+	state.x, state.y = keyIndex(1, "numwide"), 1
+	state.insertSelectedKey()
+	if state.numLock {
+		t.Fatal("expected Num Lock key to turn Num Lock off")
+	}
+	if got := state.displayKeyName("kp7"); got != "Home" {
+		t.Fatalf("expected navigation label Home with Num Lock off, got %q", got)
+	}
+	state.x, state.y = keyIndex(4, "kp7"), 4
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x1b[H")
+
+	state.x, state.y = keyIndex(5, "kp0wide"), 5
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\x1b[2~")
+
+	state.x, state.y = keyIndex(4, "+"), 4
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "+")
+	state.x, state.y = keyIndex(5, "enter"), 5
+	state.insertSelectedKey()
+	assertShellInput(t, shell, "\r")
 }
 
 func TestCustomLayoutAndFunctionKeyOutput(t *testing.T) {

@@ -7,6 +7,7 @@
     "layout": "qwerty",
     "custom_layout": [],
     "extended": true,
+    "num_lock": true,
     "sticky_modifiers": false,
     "key_padding": 1,
     "vim_navigation": true,
