@@ -1,0 +1,35 @@
+{
+  "shell": {
+    "command": "zsh",
+    "args": []
+  },
+  "keyboard": {
+    "output": "uinput",
+    "layout": "qwerty",
+    "custom_layout": [],
+    "extended": true,
+    "sticky_modifiers": false,
+    "key_padding": 1,
+    "vim_navigation": true,
+    "high_contrast": false,
+    "colors": {
+      "key_foreground": -1,
+      "key_background": -1,
+      "selected_foreground": 0,
+      "selected_background": 12,
+      "modifier_foreground": 7,
+      "modifier_background": 4
+    }
+  },
+  "mouse": {
+    "sgr": true,
+    "gpm": true,
+    "hover_highlight": true,
+    "right_click_action": "none"
+  },
+  "clipboard": {
+    "enabled": false,
+    "paste_command": [],
+    "copy_command": []
+  }
+}
